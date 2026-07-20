@@ -1,0 +1,23 @@
+name: baram2026
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - scikit-learn
+  - lightgbm
+  - xgboost
+  - catboost
+  - optuna
+  - pyarrow
+  - matplotlib
+  - seaborn
+  - plotly
+  - openpyxl
+  - pyyaml
+  - tqdm
+  - pytest
+  - pip
+  - pip:
+      - jupyterlab
