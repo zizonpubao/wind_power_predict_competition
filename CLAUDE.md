@@ -59,20 +59,57 @@ C:\Users\aica_\Desktop\open (1)\
   (21.6MW → 21,600kWh, 21.0MW → 21,000kWh). 발전량이 설비용량을 초과하는 이상치가 있는지
   EDA에서 반드시 확인.
 
-## 4. 아직 확인이 필요한 사항 (사용자 확인 요청)
+## 4. 확정된 평가 산식 & 대회 규정 (DACON 공식 페이지 조사 완료, 2026-07-20)
 
-- **1-NMAE / FICR 정확한 산식**: `data_description.md`에는 지표 이름만 있고 계산식이 없다.
-  특히 FICR(정산금획득률)은 국내 재생에너지 발전량예측제도(오차율 기반 인센티브/패널티)와
-  연동된 지표로 추정되는데, 이건 대회 공식 규정 페이지(DACON 등)를 봐야 정확히 알 수 있다.
-  **대회 공식 페이지 URL을 알려주면** domain-researcher 에이전트가 정확한 산식과 대회 규정
-  (제출 횟수 제한, 팀 규정, 마감일, 발표평가 일정 등)을 조사해서 `reports/domain_research/`에
-  정리하도록 하겠다.
-- **개발 환경 확인 결과**: GPU 미검출(`nvidia-smi` 없음) → 기본 전략은 CPU 친화적인 gradient
-  boosting(LightGBM/XGBoost/CatBoost) 계열을 우선하고, 딥러닝(LSTM/TFT 등)은 필요성이
-  확인되면 추후 검토. 현재 conda(25.11.1)는 있으나 lightgbm/xgboost/torch/optuna 등은
-  미설치 상태 — 설치 진행해도 되는지 확인 필요.
+출처: https://dacon.io/competitions/official/236727 (overview/evaluation, rules, schedule).
+상세 근거/인용은 `reports/domain_research/`(nmae_formula.md, ficr_formula.md,
+competition_rules.md) 참고. 이 파일들은 로컬에만 있고 원본 데이터 사본
+(`docs/data_description.md`, `docs/info_raw.csv`)과 달리 우리가 직접 조사·작성한 문서라
+git에도 포함되어 있다.
 
-## 5. 디렉토리 구조
+**평가 산식**:
+- 그룹별 NMAE = 평균( |예측−실제| / 그룹설비용량(kWh) ), 1-NMAE = 1 − (3개 그룹 NMAE 평균)
+- 그룹별 FICR = 획득 정산금 / 이론상 최대 정산금 (시간대별 NMAE 기준 정산 단가 적용), FICR = 3개 그룹 평균
+- **최종 점수 = 0.5 × (1-NMAE) + 0.5 × FICR**
+- 두 지표 모두 **실제 발전량이 설비용량의 10% 이상인 시간대에만** 적용 (그 미만은 평가 제외)
+- FICR의 정확한 오차율 구간 경계(4%/6% 등)와 원/kWh 단가는 DACON이 수식으로 공개하지 않음 —
+  실제 KPX 제도(오차율 구간별 계단식 단가)를 참고 자료로만 활용. **FICR은 연속적인 지표가
+  아니라 구간 경계를 넘으면 정산금이 불연속적으로 떨어지는 계단식 지표**라는 점이 모델링에
+  중요 — 단순 MAE 최소화만으로는 FICR을 직접 최적화하지 못할 수 있다 (`ficr_formula.md` 4절
+  참고). `evaluator` 에이전트가 두 지표를 `src/evaluation/`에 정확히 구현한다.
+
+**절대 규정 — 로컬 모델만 허용 (매우 중요)**:
+- **외부 원격 추론 API 사용 금지** (OpenAI API, Gemini API, Hugging Face Inference API 등).
+  **로컬에서 직접 실행되는 모델만 허용.** 즉 실제 예측 파이프라인(학습/추론)은 반드시 로컬에서
+  돌아가는 모델(LightGBM/XGBoost/CatBoost, 로컬 실행 딥러닝 모델 등)만 써야 하며, 어떤 형태로든
+  Claude/GPT/Gemini 등 원격 LLM API를 예측값 산출 로직에 끼워 넣으면 안 된다. (Claude Code를
+  개발 보조 도구로 쓰는 것 자체는 코드 작성 과정이지 제출 파이프라인의 일부가 아니므로 별개.)
+- 만약 딥러닝 모델을 쓴다면, **2026-07-06(대회 시작일) 이전에 가중치가 공개된 오픈소스 +
+  상업적 이용 가능 라이선스** 모델만 사용 가능.
+
+**일정 (오늘 2026-07-20 기준)**:
+- 대회 기간(제출 가능): ~2026-08-14(금) 10:00 (약 25일 남음)
+- 팀 병합 마감: 2026-08-07(금) 23:59
+- 2차 평가 대상자(리더보드 상위 30팀) 산출물 제출: 2026-08-14 12:00 ~ 08-17 10:00, 검증
+  08-17~08-21, 검증 통과 상위 20팀 오프라인 발표평가 2026-08-28(금)
+- 최종 순위: 리더보드 성과 50% + 발표평가 50%
+
+**제출/팀 규정**: 1일 최대 제출 5회, 팀 최대 3명, 중복 참가 금지, 부정행위 적발 시 해당 팀
+평가 제외.
+
+**여전히 미확인** (필요시 domain-researcher 추가 조사): FICR 정확한 오차율 구간 경계·단가
+(DACON 미공개), 상금 배분 상세(`/overview/prize`), 2차 순위 산정 시 "리더보드 성과"가 1차
+총점과 동일 재계산인지 여부.
+
+## 5. 개발 환경
+
+GPU 미검출(`nvidia-smi` 없음) → CPU 친화적인 gradient boosting(LightGBM/XGBoost/CatBoost)
+계열을 기본 전략으로 하고, 딥러닝(LSTM/TFT 등)은 필요성이 확인되면 추후 검토 — 단, 위 4절의
+"로컬 실행 + 대회 시작 전 공개 오픈소스 + 상업적 이용 가능 라이선스" 제약을 반드시 지킬 것.
+conda 환경 `baram2026`은 `environment.yml`로 이미 구성/설치 완료
+(pandas/numpy/scikit-learn/lightgbm/xgboost/catboost/optuna 등).
+
+## 6. 디렉토리 구조
 
 ```
 claude_ai/
@@ -105,7 +142,7 @@ claude_ai/
 └── tests/                      # 단위 테스트 (leakage 방지 로직, 피처 함수 등)
 ```
 
-## 6. 에이전트 팀 & 워크플로우
+## 7. 에이전트 팀 & 워크플로우
 
 메인 세션(사용자와 직접 대화)이 기획/설계를 담당하고, 아래 서브에이전트(`.claude/agents/`)에게
 백그라운드로 실행을 위임한다. 각 에이전트 정의는 `.claude/agents/*.md` 참고.
@@ -127,7 +164,7 @@ claude_ai/
 반려) → `trainer`가 학습 실행 → `evaluator`가 정확한 지표로 검증/랭킹 → 여러 유효 모델이
 쌓이면 `ensembler`가 블렌딩. 각 에이전트 산출물은 설계 단계로 계속 피드백된다.
 
-## 7. 코딩 컨벤션
+## 8. 코딩 컨벤션
 
 - 모든 시간 처리는 KST 그대로 유지 (UTC 변환 불필요, 변환 시 실수 유발).
 - 원본 CSV 재저장 금지. 원본에서 파생된 파일은 전부 `data/interim` 또는 `data/processed`에 parquet로.

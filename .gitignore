@@ -16,3 +16,7 @@ __pycache__/
 venv/
 
 .claude/settings.local.json
+
+# 대회 제공 원자료 사본/파생본 — 퍼블릭 리포에 재배포하지 않음 (로컬에만 보관)
+docs/data_description.md
+docs/info_raw.csv
