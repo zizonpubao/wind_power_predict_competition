@@ -95,6 +95,19 @@ def run_group(kpx_group: str, n_splits: int = N_SPLITS) -> dict[str, Any]:
         X_train, y_train = train_df[feature_cols], train_df["target"]
         X_val, y_val = val_df[feature_cols], val_df["target"]
 
+        # NOTE (code-review, 2026-07-20): early stopping uses this same fold's
+        # X_val/y_val as its eval_set, and the reported score below is then
+        # computed on that same val_df -- the number of boosting rounds was
+        # chosen by peeking at the exact rows the score is measured on. This
+        # is a mild, commonly-accepted form of leakage distinct from the
+        # time-ordering leakage this project otherwise guards against: it
+        # makes the reported CV score a slightly optimistic estimate of true
+        # out-of-sample performance (model complexity tuned to this fold's
+        # noise). Not fixed here since it doesn't affect leaderboard
+        # submissions (only this script's own internal comparisons), but
+        # don't mistake these numbers for an unbiased holdout estimate when
+        # comparing configs. A proper fix would carve a separate early-
+        # stopping slice out of train_df, distinct from the reported val_df.
         model = GroupLGBMModel(capacity_kwh=capacity)
         model.fit(
             X_train,
@@ -180,6 +193,7 @@ def run_group(kpx_group: str, n_splits: int = N_SPLITS) -> dict[str, Any]:
         "fold_metrics": fold_metrics,
         "agg_metrics": agg_metrics,
         "final_model": final_model,
+        "final_n_estimators": final_model.params["n_estimators"],
     }
 
 
@@ -209,8 +223,19 @@ def main() -> str:
         "model_default_params": DEFAULT_PARAMS,
         "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
         "git_commit": _get_git_commit(),
+        # Actual n_estimators used by each group's saved final_model (mean of
+        # the CV folds' best_iteration, floored at 50 -- see run_group) --
+        # NOT model_default_params["n_estimators"], which is only the
+        # unused class default. Reproducing model_<group>.joblib requires
+        # this exact value, not a re-derivation from metrics.json.
+        "final_n_estimators_per_group": {
+            g: all_results[g]["final_n_estimators"] for g in KPX_GROUPS
+        },
         "feature_count_per_group": {
             g: len(all_results[g]["feature_cols"]) for g in KPX_GROUPS
+        },
+        "feature_cols_per_group": {
+            g: all_results[g]["feature_cols"] for g in KPX_GROUPS
         },
     }
     with open(run_dir / "config.yaml", "w", encoding="utf-8") as f:
