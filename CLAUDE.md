@@ -69,7 +69,26 @@ C:\Users\aica_\Desktop\open (1)\
   (21.6MW → 21,600kWh, 21.0MW → 21,000kWh). 발전량이 설비용량을 초과하는 이상치가 있는지
   EDA에서 반드시 확인.
 
-## 4. 확정된 평가 산식 & 대회 규정 (DACON 공식 페이지 조사 완료, 2026-07-20)
+## 4. EDA 확정 사실 (`reports/eda/eda_summary.md`, 2026-07-20 전수 조사 완료)
+
+- vestas SCADA에 물리적으로 불가능한 극단값이 0.48%(759/157,819행) 존재 (`|값|` 최대
+  ~5×10⁷) — SCADA를 어디에 쓰든 `|값| > ~700` 임계치로 마스킹 필수. unison은 이런 문제 없음.
+- 보정 후에도 라벨-SCADA 합산치 gap은 p5~p95 ±14~16%p, p1~p99 ±23~29%p로 크고 계절성(겨울↑
+  여름↓)까지 있음 — **SCADA는 부드러운 참고 신호일 뿐 QA pass/fail 기준으로 쓰지 말 것.**
+- 결측은 라벨(타깃)에만 존재하고 규모도 작음 (그룹1/2 103~104시간, 그룹3 2023~2024 구간 내
+  6시간) — 결측 행은 단순 drop으로 충분, 임퓨테이션 불필요. 기상(LDAPS/GFS)·SCADA 파일은
+  시간축 결측 0건.
+- group3은 SCADA 상관계수도 그룹1/2보다 낮음(0.949 vs 0.965~0.969) — 짧은 학습기간과 함께
+  개별 모델/손실 가중치 조정을 고려할 근거가 하나 더 늘어남.
+- group3 설비용량 초과 38건(최대 +0.62%)은 무시 가능하나, 추론 후처리에
+  `clip(0, capacity×1.01)` 안전장치 권장.
+- **LDAPS가 주 피처, GFS는 보조** — 풍속-발전량 상관계수가 LDAPS 0.73~0.74, GFS 0.54~0.55로
+  뚜렷하게 차이남 (해상도 1.5km vs 0.25도 차이가 그대로 반영).
+- lead-hour(예보 시차)에 따른 뚜렷한 성능 저하 신호는 발견되지 않음 (대리 지표 기반 한계 있음).
+- 원본 데이터 자체에는 leakage 0건 (4개 기상 파일 전수 확인) — leakage 리스크는 전적으로
+  우리가 만드는 `src/validation` 분할기 구현에 달려있음.
+
+## 5. 확정된 평가 산식 & 대회 규정 (DACON 공식 페이지 조사 완료, 2026-07-20)
 
 출처: https://dacon.io/competitions/official/236727 (overview/evaluation, rules, schedule).
 상세 근거/인용은 `reports/domain_research/`(nmae_formula.md, ficr_formula.md,
@@ -123,7 +142,7 @@ git에도 포함되어 있다.
 (DACON 미공개), 상금 배분 상세(`/overview/prize`), 2차 순위 산정 시 "리더보드 성과"가 1차
 총점과 동일 재계산인지 여부.
 
-## 5. 개발 환경
+## 6. 개발 환경
 
 GPU 미검출(`nvidia-smi` 없음) → CPU 친화적인 gradient boosting(LightGBM/XGBoost/CatBoost)
 계열을 기본 전략으로 하고, 딥러닝(LSTM/TFT 등)은 필요성이 확인되면 추후 검토 — 단, 위 4절의
@@ -131,7 +150,7 @@ GPU 미검출(`nvidia-smi` 없음) → CPU 친화적인 gradient boosting(LightG
 conda 환경 `baram2026`은 `environment.yml`로 이미 구성/설치 완료
 (pandas/numpy/scikit-learn/lightgbm/xgboost/catboost/optuna 등).
 
-## 6. 디렉토리 구조
+## 7. 디렉토리 구조
 
 ```
 claude_ai/
@@ -164,7 +183,7 @@ claude_ai/
 └── tests/                      # 단위 테스트 (leakage 방지 로직, 피처 함수 등)
 ```
 
-## 7. 에이전트 팀 & 워크플로우
+## 8. 에이전트 팀 & 워크플로우
 
 메인 세션(사용자와 직접 대화)이 기획/설계를 담당하고, 아래 서브에이전트(`.claude/agents/`)에게
 백그라운드로 실행을 위임한다. 각 에이전트 정의는 `.claude/agents/*.md` 참고.
@@ -186,7 +205,7 @@ claude_ai/
 반려) → `trainer`가 학습 실행 → `evaluator`가 정확한 지표로 검증/랭킹 → 여러 유효 모델이
 쌓이면 `ensembler`가 블렌딩. 각 에이전트 산출물은 설계 단계로 계속 피드백된다.
 
-## 8. 코딩 컨벤션
+## 9. 코딩 컨벤션
 
 - 모든 시간 처리는 KST 그대로 유지 (UTC 변환 불필요, 변환 시 실수 유발).
 - 원본 CSV 재저장 금지. 원본에서 파생된 파일은 전부 `data/interim` 또는 `data/processed`에 parquet로.
