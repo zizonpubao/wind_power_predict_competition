@@ -286,6 +286,30 @@ def spatial_aggregate(
 # 3. Power-curve-shaped transform
 # ---------------------------------------------------------------------------
 
+# Confirmed/approximate cut-in/rated/cut-out breakpoints per turbine model,
+# from reports/domain_research/turbine_power_curves.md (2026-07-20).
+# - VESTAS V126: cut_in/cut_out are manufacturer-confirmed (identical across
+#   all V126 rated-power variants). The project's exact 3.6MW "Power
+#   Optimised Mode (site specific)" has no published rated-wind-speed of its
+#   own -- `rated=11.5` is the same-platform V126-3.45MW secondary-source
+#   approximation (V126-3.0MW's manufacturer-confirmed value is 12.0, for
+#   comparison), NOT a 3.6MW-specific confirmed number.
+# - UNISON U136: all three values are manufacturer-confirmed directly
+#   (unison.co.kr product page) and match the project's 4.2MW/117m spec
+#   exactly.
+TURBINE_POWER_CURVE_PARAMS = {
+    "vestas_v126": {"cut_in": 3.0, "rated": 11.5, "cut_out": 22.5},  # rated: approx, not 3.6MW-specific
+    "unison_u136": {"cut_in": 3.0, "rated": 11.3, "cut_out": 22.0},  # fully confirmed
+}
+
+# kpx_group_1/2 turbines are VESTAS V126, kpx_group_3 is UNISON U136 (see
+# docs/turbine_kpx_mapping.md).
+KPX_GROUP_TURBINE_MODEL = {
+    "kpx_group_1": "vestas_v126",
+    "kpx_group_2": "vestas_v126",
+    "kpx_group_3": "unison_u136",
+}
+
 
 def power_curve_transform(
     wind_speed: pd.Series,
@@ -304,15 +328,19 @@ def power_curve_transform(
         capped regardless of extra wind)
       - 0 above cut_out (the turbine feathers/shuts down to protect itself)
 
-    # TODO: replace defaults once reports/domain_research/turbine_power_curves.md
-    # lands. cut_in=3.0 / rated=12.0 / cut_out=25.0 (m/s) are generic
-    # class-typical placeholders, NOT the confirmed VESTAS V126 / UNISON U136
-    # spec -- domain-researcher is investigating the manufacturer curves in
-    # parallel. cut_in/rated/cut_out are exposed as named parameters
-    # specifically so the confirmed values can be swapped in per-group
-    # without touching this function's body (V126 and U136 will likely need
-    # different values, per EDA section 5's group3-vs-group1/2 power-curve
-    # note in reports/eda/eda_summary.md).
+    Defaults (cut_in=3.0/rated=12.0/cut_out=25.0) are generic class-typical
+    placeholders -- for the project's actual turbines, callers should pass
+    breakpoints from `TURBINE_POWER_CURVE_PARAMS` (keyed by
+    "vestas_v126"/"unison_u136", or via `KPX_GROUP_TURBINE_MODEL[kpx_group]`)
+    instead of relying on these defaults, e.g.::
+
+        params = TURBINE_POWER_CURVE_PARAMS[KPX_GROUP_TURBINE_MODEL["kpx_group_3"]]
+        power_curve_transform(wind_speed, **params)
+
+    See reports/domain_research/turbine_power_curves.md for the sourcing
+    detail and caveats (in particular: VESTAS's `rated` is a same-platform
+    approximation, not confirmed for the project's exact 3.6MW mode; UNISON's
+    three values are all manufacturer-confirmed).
 
     Parameters
     ----------
