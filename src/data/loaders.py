@@ -146,6 +146,15 @@ def aggregate_scada_to_hourly(df: pd.DataFrame, power_cols: list[str]) -> pd.Dat
     Returns one row per hour with a ``kst_dtm`` column set to the hour-*end*
     timestamp, matching train_labels.csv's "집계 구간의 종료 시각" convention:
     readings at HH:00..HH:50 map to kst_dtm = HH+1:00.
+
+    Warning
+    -------
+    This function does **not** mask SCADA glitch/sentinel values. EDA found
+    ~0.48% (759/157,819) of ``scada_vestas_train.csv`` rows contain physically
+    impossible readings (|value| up to ~5e7) that must be filtered
+    (``|value| > ~700``) *before* calling this on vestas columns, or a single
+    glitch row will corrupt that hour's sum. See CLAUDE.md section 4.
+    ``scada_unison_train.csv`` had no such rows as of the 2026-07-20 EDA.
     """
     hour_start = df["kst_dtm"].dt.floor("h")
     hourly = df.groupby(hour_start)[power_cols].sum(min_count=1)
@@ -159,6 +168,12 @@ def group_scada_power(vestas_df: pd.DataFrame, unison_df: pd.DataFrame) -> pd.Da
     `configs.paths.TURBINE_GROUP_MAP`. Reuses `aggregate_scada_to_hourly` for the
     time aggregation, then sums the resulting per-turbine hourly kWh across each
     group's turbines.
+
+    Warning
+    -------
+    ``vestas_df`` is not glitch-masked here (see `aggregate_scada_to_hourly`'s
+    warning) — kpx_group_1/kpx_group_2 output can be corrupted by the ~0.48%
+    of vestas rows with |value| up to ~5e7 unless the caller pre-filters them.
     """
     source_by_group = {
         "kpx_group_1": vestas_df,
