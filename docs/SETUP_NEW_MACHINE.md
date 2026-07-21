@@ -20,13 +20,16 @@ git clone https://github.com/zizonpubao/wind_power_predict_competition.git
 
 ## 3. git에 없는 것 (수동으로 옮겨야 함)
 
-- **원본 대회 데이터** (`open (1)` 폴더, 필수): 재배포 금지 우려로 git에 올리지 않았다.
-  원래 PC(노트북)에서 USB/클라우드 드라이브 등으로 직접 복사해 와야 한다.
-  - `configs/paths.py`의 `RAW_DATA_ROOT`가 `C:\Users\aica_\Desktop\open (1)`로 고정돼
-    있으므로, **새 PC의 Windows 사용자명도 `aica_`이고 같은 경로에 복사하면 코드 수정 없이
-    바로 동작**한다.
-  - 사용자명/경로가 다르면 `configs/paths.py`의 `RAW_DATA_ROOT` 한 줄만 그 PC의 실제 경로로
-    바꾸면 된다.
+- **원본 대회 데이터** (`open (1)` 폴더 내용물, 필수): 재배포 금지 우려로 git에 올리지
+  않았다. 원래 PC에서 USB/클라우드 드라이브 등으로 직접 복사해 와야 한다.
+  - `configs/paths.py`는 여러 머신을 오가며 작업하는 상황을 감안해 **경로를 자동으로
+    찾는다**: `_KNOWN_RAW_DATA_ROOTS` 목록에 있는 후보 경로들 중 `sample_submission.csv`가
+    실제로 있는 첫 번째 경로를 씀 (현재 등록된 후보: 노트북의 `C:\Users\aica_\Desktop\open (1)`,
+    heelo PC의 `C:\Users\heelo\Desktop\claude_code\wind_power_predicet\datasets`
+    /`...\datasets\open (1)`).
+  - **완전히 새로운 머신이면**: `configs/paths.py`의 `_KNOWN_RAW_DATA_ROOTS`에 그 머신의
+    실제 데이터 경로를 한 줄 추가하면 된다. 또는 코드 수정 없이 `BARAM_RAW_DATA_ROOT`
+    환경변수로 덮어쓸 수도 있음 (`_KNOWN_RAW_DATA_ROOTS`보다 항상 우선).
 - **생성된 산출물** (`data/interim/`, `data/processed/`, `experiments/`, `submissions/`):
   전부 `.gitignore` 대상이라 git에 없다. 아래 4번 순서대로 다시 돌리면 몇 분 안에
   복구된다 (원본 데이터만 있으면 어디서든 재생성 가능).
