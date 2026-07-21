@@ -42,6 +42,7 @@ import yaml
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
 from src.evaluation.metrics import competition_score
 from src.inference.predict import generate_submission
+from src.models.calibration import PredictionCalibrator
 from src.models.lgbm_model import DEFAULT_EARLY_STOPPING_ROUNDS, DEFAULT_PARAMS, GroupLGBMModel
 from src.training.train_baseline import KPX_GROUPS, N_SPLITS, _get_feature_cols, _get_git_commit
 from src.validation.splitter import BlockTimeSeriesSplit
@@ -69,23 +70,34 @@ def _suggest_params(trial: optuna.Trial) -> dict[str, Any]:
     }
 
 
-def _cv_score(
+def _oof_predict(
     df: pd.DataFrame,
     feature_cols: list[str],
     capacity: float,
     kpx_group: str,
     params: dict[str, Any],
     n_splits: int = N_SPLITS,
-) -> tuple[list[dict[str, Any]], list[int]]:
-    """Run the same block-aware 5-fold CV train_baseline.run_group runs, for an
-    arbitrary hyperparameter dict. Returns (fold_metrics, best_iterations),
-    same shapes as train_baseline.run_group's internals -- reused both as the
-    Optuna objective's value and, after the study finishes, to get the
-    best-params fold metrics/best_iterations needed for the final refit.
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """Run the block-aware CV fold loop once for an arbitrary hyperparameter
+    dict, collecting every fold's held-out (out-of-fold) predictions into one
+    concatenated frame.
+
+    Returns ``(oof_df, fold_meta)``:
+      - ``oof_df``: one row per validation-fold row, columns
+        ``fold`` (1-indexed), ``forecast_kst_dtm``, ``pred``, ``actual``.
+      - ``fold_meta``: one dict per fold with ``fold``/``n_train``/``n_val``/
+        ``best_iteration``.
+
+    This is the single source of truth for "what did the tuned model predict
+    on held-out data" -- ``_cv_score`` below reduces it to per-fold
+    ``competition_score`` (used by the Optuna objective and the final-refit
+    fold metrics), and ``src/training/evaluate_calibration.py`` reuses it
+    directly to get the raw ``(pred, actual)`` pairs an isotonic calibrator
+    needs, rather than duplicating this fit loop.
     """
     splitter = BlockTimeSeriesSplit(n_splits=n_splits)
-    fold_metrics: list[dict[str, Any]] = []
-    best_iterations: list[int] = []
+    oof_records: list[pd.DataFrame] = []
+    fold_meta: list[dict[str, Any]] = []
 
     for fold_i, (train_idx, val_idx) in enumerate(splitter.split(df), start=1):
         train_df = df.iloc[train_idx]
@@ -102,28 +114,87 @@ def _cv_score(
         )
 
         val_pred = model.predict(X_val)
-        pred_df = pd.DataFrame(
-            {"forecast_kst_dtm": val_df["forecast_kst_dtm"].to_numpy(), kpx_group: val_pred}
+        oof_records.append(
+            pd.DataFrame(
+                {
+                    "fold": fold_i,
+                    "forecast_kst_dtm": val_df["forecast_kst_dtm"].to_numpy(),
+                    "pred": val_pred,
+                    "actual": y_val.to_numpy(),
+                }
+            )
         )
-        actual_df = pd.DataFrame(
-            {"forecast_kst_dtm": val_df["forecast_kst_dtm"].to_numpy(), kpx_group: y_val.to_numpy()}
-        )
-        scores = competition_score(pred_df, actual_df, group_cols=[kpx_group])
-
-        fold_metrics.append(
+        fold_meta.append(
             {
                 "fold": fold_i,
                 "n_train": int(len(train_idx)),
                 "n_val": int(len(val_idx)),
-                "score": scores["score"],
-                "1-NMAE": scores["1-NMAE"],
-                "FICR": scores["FICR"],
                 "best_iteration": int(model.best_iteration_) if model.best_iteration_ else None,
             }
         )
-        if model.best_iteration_:
-            best_iterations.append(int(model.best_iteration_))
 
+    oof_df = pd.concat(oof_records, ignore_index=True)
+    return oof_df, fold_meta
+
+
+def _score_oof(
+    oof_df: pd.DataFrame,
+    fold_meta: list[dict[str, Any]],
+    kpx_group: str,
+    pred_col: str = "pred",
+) -> list[dict[str, Any]]:
+    """Reduce an ``_oof_predict`` frame to per-fold ``competition_score``
+    dicts (same shape ``_cv_score`` has always returned as its
+    ``fold_metrics``). ``pred_col`` lets callers score an alternate
+    prediction column (e.g. a calibrated one) against the same OOF split
+    without re-running CV.
+    """
+    fold_metrics: list[dict[str, Any]] = []
+    for meta in fold_meta:
+        fold_i = meta["fold"]
+        fold_rows = oof_df[oof_df["fold"] == fold_i]
+        pred_df = pd.DataFrame(
+            {"forecast_kst_dtm": fold_rows["forecast_kst_dtm"].to_numpy(), kpx_group: fold_rows[pred_col].to_numpy()}
+        )
+        actual_df = pd.DataFrame(
+            {"forecast_kst_dtm": fold_rows["forecast_kst_dtm"].to_numpy(), kpx_group: fold_rows["actual"].to_numpy()}
+        )
+        scores = competition_score(pred_df, actual_df, group_cols=[kpx_group])
+        fold_metrics.append(
+            {
+                "fold": fold_i,
+                "n_train": meta["n_train"],
+                "n_val": meta["n_val"],
+                "score": scores["score"],
+                "1-NMAE": scores["1-NMAE"],
+                "FICR": scores["FICR"],
+                "best_iteration": meta["best_iteration"],
+            }
+        )
+    return fold_metrics
+
+
+def _cv_score(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    capacity: float,
+    kpx_group: str,
+    params: dict[str, Any],
+    n_splits: int = N_SPLITS,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Run the same block-aware 5-fold CV train_baseline.run_group runs, for an
+    arbitrary hyperparameter dict. Returns (fold_metrics, best_iterations),
+    same shapes as train_baseline.run_group's internals -- reused both as the
+    Optuna objective's value and, after the study finishes, to get the
+    best-params fold metrics/best_iterations needed for the final refit.
+
+    Thin wrapper around ``_oof_predict`` + ``_score_oof`` -- behavior is
+    unchanged from before this was split out, just no longer duplicating the
+    fit loop that ``evaluate_calibration.py`` also needs.
+    """
+    oof_df, fold_meta = _oof_predict(df, feature_cols, capacity, kpx_group, params, n_splits=n_splits)
+    fold_metrics = _score_oof(oof_df, fold_meta, kpx_group)
+    best_iterations = [f["best_iteration"] for f in fold_metrics if f["best_iteration"]]
     return fold_metrics, best_iterations
 
 
@@ -175,9 +246,14 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
 
     # Re-run CV once more with the winning params to get fold_metrics +
     # best_iterations for the final refit (Optuna only records the scalar
-    # objective value per trial, not the full fold breakdown).
+    # objective value per trial, not the full fold breakdown). Uses
+    # _oof_predict directly (instead of the _cv_score wrapper) because the
+    # calibrator fit below also needs the raw pooled (pred, actual) pairs,
+    # not just the reduced per-fold scores.
     best_params = dict(study.best_params)
-    fold_metrics, best_iterations = _cv_score(df, feature_cols, capacity, kpx_group, best_params, n_splits=n_splits)
+    oof_df, fold_meta = _oof_predict(df, feature_cols, capacity, kpx_group, best_params, n_splits=n_splits)
+    fold_metrics = _score_oof(oof_df, fold_meta, kpx_group)
+    best_iterations = [f["best_iteration"] for f in fold_metrics if f["best_iteration"]]
 
     agg_metrics = {
         "score_mean": float(np.nanmean([f["score"] for f in fold_metrics])),
@@ -205,6 +281,18 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
         final_model.params["n_estimators"],
     )
 
+    # Production PredictionCalibrator: isotonic pred -> actual mapping fit on
+    # ALL 5 folds' pooled OOF pairs (not cross-fit -- there is no held-out set
+    # left to protect for a deployed artifact, exactly like final_model above
+    # uses all rows). Wired in per reports/eda/ficr_gap_diagnosis.md's #1
+    # recommendation and validated by src/training/evaluate_calibration.py's
+    # leak-free cross-fit evaluation, which found a genuine (if modest)
+    # overall CV score improvement (0.5759 -> 0.5785) on the
+    # 20260720_161850_lgbm_tuned best_params -- see that script's docstring
+    # for the leakage-avoidance method used to validate this.
+    calibrator = PredictionCalibrator().fit(oof_df["pred"].to_numpy(), oof_df["actual"].to_numpy())
+    logger.info("%s: fit production PredictionCalibrator on %d pooled OOF rows", kpx_group, len(oof_df))
+
     trials_records = [
         {
             "number": t.number,
@@ -231,6 +319,7 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
         "final_model": final_model,
         "final_params": final_params,
         "final_n_estimators": final_model.params["n_estimators"],
+        "calibrator": calibrator,
     }
 
 

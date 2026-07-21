@@ -6,6 +6,18 @@ matching ``sample_submission.csv``'s exact schema and row order.
 ``forecast_id`` is never regenerated here -- it, and the row order, come
 straight from ``load_sample_submission()`` via a left join on
 ``forecast_kst_dtm``, per CLAUDE.md / the code-writer role brief.
+
+If ``experiments/<run_id>/calibrator_<group>.joblib`` exists (written by
+``src.training.tune_hyperparams`` / ``src.training.evaluate_calibration
+--save-calibrators`` when the isotonic OOF-residual calibration was found to
+genuinely improve CV score -- see ``reports/eda/ficr_gap_diagnosis.md``),
+it is applied to that group's raw predictions: predict -> calibrate -> clip
+to capacity -> assemble submission. Calibration runs on top of
+``model.predict()``'s own capacity-clipped output (the calibrator was itself
+fit on those same clipped OOF predictions), and the capacity clip is
+re-applied afterward since isotonic regression can map a near-capacity input
+slightly above the safety bound -- clipping stays the very last
+post-processing step either way.
 """
 from __future__ import annotations
 
@@ -13,10 +25,12 @@ import argparse
 import logging
 
 import joblib
+import numpy as np
 import pandas as pd
 
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, SUBMISSIONS_DIR
 from src.data.loaders import load_sample_submission
+from src.models.calibration import PredictionCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +69,18 @@ def generate_submission(run_id: str) -> pd.DataFrame:
         feature_cols = _get_feature_cols(test_df)
 
         preds = model.predict(test_df[feature_cols])
+
+        calibrator_path = run_dir / f"calibrator_{kpx_group}.joblib"
+        if calibrator_path.exists():
+            calibrator = PredictionCalibrator.load(calibrator_path)
+            preds = calibrator.transform(preds)
+            # Re-clip after calibration: the calibrator was fit on already
+            # capacity-clipped OOF predictions, but isotonic regression can
+            # still map a near-capacity input a little above the bound, so
+            # the safety clamp stays the last step before assembling preds.
+            preds = np.clip(preds, 0.0, model.capacity_kwh * 1.01)
+            logger.info("%s: applied calibrator %s", kpx_group, calibrator_path.name)
+
         pred_df = pd.DataFrame(
             {"forecast_kst_dtm": test_df["forecast_kst_dtm"].to_numpy(), kpx_group: preds}
         )
