@@ -75,6 +75,16 @@ input feature -- it is a training-pipeline-design aid only (label validation,
 outlier detection, power-curve parameter estimation), never a feature column.
 Do not add a SCADA-derived column here even though ``src.data.loaders``
 exposes SCADA loaders that would be easy to reach for.
+
+Wake-alignment features (kpx_group_2 only)
+--------------------------------------------
+``kpx_group_2``'s feature table additionally gets 3 columns from
+``src.features.wake_features.add_group1_group2_wake_features`` --
+``wake_alignment_cos_g1g2``/``wake_sector_exposure_g1g2``/
+``wake_deficit_proxy_g1g2`` -- encoding how aligned the forecast wind
+direction is with the geometric wake axis from the upwind ``kpx_group_1``
+farm (``reports/domain_research/wake_effect.md``). kpx_group_1/3 do not get
+these columns; see that module's docstring for why.
 """
 from __future__ import annotations
 
@@ -85,6 +95,7 @@ import pandas as pd
 
 from configs.paths import DATA_PROCESSED_DIR
 from src.data.loaders import load_gfs, load_ldaps, load_train_labels
+from src.features.wake_features import add_group1_group2_wake_features
 from src.features.weather_features import (
     KPX_GROUP_TURBINE_MODEL,
     TURBINE_POWER_CURVE_PARAMS,
@@ -217,6 +228,17 @@ def _assemble_feature_table(
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     merged = lag_rolling_features(merged, "data_available_kst_dtm", lag_value_cols, windows=_LAG_WINDOWS)
+
+    if kpx_group == "kpx_group_2":
+        # Wake-alignment features (reports/domain_research/wake_effect.md):
+        # kpx_group_1 sits ~1.28km upwind of kpx_group_2 along the same
+        # ridge. Only kpx_group_2 gets these -- see wake_features.py's module
+        # docstring for why group1/group3 are out of scope. Reuses the
+        # already-computed ldaps_10m_dir_sin/_dir_cos/_dir_deg/_speed_mean
+        # columns (wind_speed_direction aggregates uniformly across all LDAPS
+        # grids regardless of kpx_group, so no separate group1-centroid
+        # recomputation is needed here -- see that module's docstring).
+        merged = add_group1_group2_wake_features(merged, prefix="ldaps_10m", suffix="g1g2")
 
     if split == "train":
         labels = load_train_labels()[["kst_dtm", kpx_group]].rename(

@@ -82,6 +82,24 @@ def test_build_feature_table_test_split_has_no_target_column(one_week_frames):
     assert not out.duplicated().any()
 
 
+def test_wake_features_only_on_kpx_group_2(one_week_frames):
+    ldaps_small, gfs_small = one_week_frames
+    wake_cols = {"wake_alignment_cos_g1g2", "wake_sector_exposure_g1g2", "wake_deficit_proxy_g1g2"}
+
+    out_g1 = _assemble_feature_table(ldaps_small, gfs_small, "train", "kpx_group_1")
+    out_g2 = _assemble_feature_table(ldaps_small, gfs_small, "train", "kpx_group_2")
+    out_g3 = _assemble_feature_table(ldaps_small, gfs_small, "train", "kpx_group_3")
+
+    assert wake_cols.issubset(out_g2.columns)
+    assert not wake_cols & set(out_g1.columns)
+    assert not wake_cols & set(out_g3.columns)
+
+    # Sanity: wake_sector_exposure_g1g2 must be in [0, 1] and
+    # wake_deficit_proxy_g1g2 must never be negative (max(0, ...) clip).
+    assert out_g2["wake_sector_exposure_g1g2"].between(0.0, 1.0).all()
+    assert (out_g2["wake_deficit_proxy_g1g2"] >= 0.0).all()
+
+
 def test_lead_hour_resets_within_each_data_available_block(one_week_frames):
     ldaps_small, gfs_small = one_week_frames
     out = _assemble_feature_table(ldaps_small, gfs_small, "train", "kpx_group_3")
