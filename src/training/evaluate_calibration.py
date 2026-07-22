@@ -3,6 +3,16 @@ systematic under-prediction bias found in ``reports/eda/ficr_gap_diagnosis.md``
 (the tuned LightGBM run under-predicts 62-66% of eligible hours, mean signed
 error -721 to -1,246 kWh, worst at high generation).
 
+Saving decisions are made **per KPX group, not overall** (see
+``reports/eda/group2_calibration_regression.md``): calibration has been
+observed to genuinely help kpx_group_1/kpx_group_3's leak-free cross-fit CV
+score while making kpx_group_2's *worse*, even though the mean-of-3-groups
+("overall") score improves. Gating on the overall mean alone would silently
+deploy a net-harmful calibrator for whichever group(s) regress. ``--save-
+calibrators`` therefore saves ``calibrator_<group>.joblib`` independently for
+each group whose own cross-fit ``score_mean`` improves, and skips any group
+whose does not -- there is no "improves overall -> save everything" fallback.
+
 For each of the 3 KPX groups:
   1. Reconstruct genuine OOF predictions the same way the diagnosis report
      did: refit ``GroupLGBMModel`` per CV fold with the tuned
@@ -57,7 +67,7 @@ import numpy as np
 import pandas as pd
 
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
-from src.models.calibration import PredictionCalibrator
+from src.models.calibration import PredictionCalibrator, cross_fit_calibrate
 from src.training.train_baseline import KPX_GROUPS, N_SPLITS, _get_feature_cols
 from src.training.tune_hyperparams import _oof_predict, _score_oof
 
@@ -71,31 +81,6 @@ def _load_best_params(run_id: str, kpx_group: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         tuning_results = json.load(f)
     return dict(tuning_results[kpx_group]["best_params"])
-
-
-def _cross_fit_calibrated_column(oof_df: pd.DataFrame) -> np.ndarray:
-    """Leave-one-fold-out cross-fit calibration (see module docstring).
-
-    For each fold present in ``oof_df["fold"]``, fits a fresh
-    ``PredictionCalibrator`` on every OTHER fold's (pred, actual) pairs, and
-    uses it to transform that fold's own ``pred`` column. Returns a numpy
-    array aligned with ``oof_df``'s row order (a "pred_calibrated" column
-    where no row was ever transformed by a calibrator that saw that row, or
-    any row sharing its fold, during fitting).
-    """
-    calibrated = np.empty(len(oof_df), dtype=float)
-    folds = sorted(oof_df["fold"].unique())
-    for fold_i in folds:
-        fit_mask = (oof_df["fold"] != fold_i).to_numpy()
-        apply_mask = (oof_df["fold"] == fold_i).to_numpy()
-
-        calibrator = PredictionCalibrator()
-        calibrator.fit(
-            oof_df.loc[fit_mask, "pred"].to_numpy(),
-            oof_df.loc[fit_mask, "actual"].to_numpy(),
-        )
-        calibrated[apply_mask] = calibrator.transform(oof_df.loc[apply_mask, "pred"].to_numpy())
-    return calibrated
 
 
 def _tier_distribution(oof_df: pd.DataFrame, capacity: float, pred_col: str) -> dict[str, float]:
@@ -131,7 +116,7 @@ def evaluate_group(kpx_group: str, tuned_run_id: str = TUNED_RUN_ID, n_splits: i
 
     logger.info("%s: leave-one-fold-out cross-fit calibration ...", kpx_group)
     oof_df = oof_df.copy()
-    oof_df["pred_calibrated"] = _cross_fit_calibrated_column(oof_df)
+    oof_df["pred_calibrated"] = cross_fit_calibrate(oof_df)
 
     raw_fold_metrics = _score_oof(oof_df, fold_meta, kpx_group, pred_col="pred")
     calib_fold_metrics = _score_oof(oof_df, fold_meta, kpx_group, pred_col="pred_calibrated")
@@ -188,9 +173,11 @@ def main() -> dict:
         "--save-calibrators",
         action="store_true",
         help=(
-            "If the leak-free evaluation shows a genuine overall CV score improvement, save each "
-            "group's production PredictionCalibrator (fit on ALL pooled OOF rows) as "
-            "experiments/<run-id>/calibrator_<group>.joblib, ready for src/inference/predict.py to load."
+            "For each group whose own leak-free cross-fit evaluation shows a genuine CV score "
+            "improvement, save that group's production PredictionCalibrator (fit on ALL pooled "
+            "OOF rows) as experiments/<run-id>/calibrator_<group>.joblib, ready for "
+            "src/inference/predict.py to load. Groups whose cross-fit score regresses are skipped "
+            "-- this decision is made per group, never gated on the overall mean-of-3-groups score."
         ),
     )
     args = parser.parse_args()
@@ -230,6 +217,21 @@ def main() -> dict:
         )
         print("-" * len(header))
 
+    # Per-group verdict: this is what actually gates saving (see module
+    # docstring / reports/eda/group2_calibration_regression.md) -- the
+    # mean-of-3-groups "overall" delta below is printed for context only and
+    # must never be used to decide whether any individual group's calibrator
+    # gets persisted, since a group can regress even while overall improves.
+    per_group_improves = {
+        g: results[g]["calib_agg"]["score_mean"] > results[g]["raw_agg"]["score_mean"] for g in KPX_GROUPS
+    }
+    print("\nPer-group verdict (this is what gates --save-calibrators):")
+    for g in KPX_GROUPS:
+        raw_v = results[g]["raw_agg"]["score_mean"]
+        calib_v = results[g]["calib_agg"]["score_mean"]
+        verdict_g = "IMPROVES -> will save" if per_group_improves[g] else "REGRESSES -> will skip"
+        print(f"  {g:<14}{raw_v:.4f} -> {calib_v:.4f} (delta {calib_v - raw_v:+.4f})  {verdict_g}")
+
     overall_raw = {
         "score_mean": float(np.mean([results[g]["raw_agg"]["score_mean"] for g in KPX_GROUPS])),
         "1-NMAE_mean": float(np.mean([results[g]["raw_agg"]["1-NMAE_mean"] for g in KPX_GROUPS])),
@@ -240,31 +242,35 @@ def main() -> dict:
         "1-NMAE_mean": float(np.mean([results[g]["calib_agg"]["1-NMAE_mean"] for g in KPX_GROUPS])),
         "FICR_mean": float(np.mean([results[g]["calib_agg"]["FICR_mean"] for g in KPX_GROUPS])),
     }
+    print()
     for metric, key in (("score", "score_mean"), ("1-NMAE", "1-NMAE_mean"), ("FICR", "FICR_mean")):
         raw_v = overall_raw[key]
         calib_v = overall_calib[key]
         print(f"{'OVERALL':<14}{metric:<10}{raw_v:>10.4f}{calib_v:>12.4f}{calib_v - raw_v:>10.4f}")
-
-    improves = overall_calib["score_mean"] > overall_raw["score_mean"]
-    verdict = "IMPROVES" if improves else "DOES NOT IMPROVE"
     print(
-        f"\nVerdict: calibration {verdict} the overall CV score "
-        f"({overall_raw['score_mean']:.4f} -> {overall_calib['score_mean']:.4f}, "
-        f"delta {overall_calib['score_mean'] - overall_raw['score_mean']:+.4f})"
+        "(OVERALL is a mean-of-3-groups reference figure only -- it is NOT used to decide "
+        "saving; see per-group verdict above.)"
     )
 
     if args.save_calibrators:
-        if improves:
-            run_dir = EXPERIMENTS_DIR / args.run_id
-            for g in KPX_GROUPS:
-                calib_path = run_dir / f"calibrator_{g}.joblib"
+        run_dir = EXPERIMENTS_DIR / args.run_id
+        for g in KPX_GROUPS:
+            calib_path = run_dir / f"calibrator_{g}.joblib"
+            if per_group_improves[g]:
                 results[g]["production_calibrator"].save(calib_path)
                 logger.info("Saved production calibrator: %s", calib_path)
-            print(f"\nSaved production calibrators to {run_dir}")
-        else:
-            print("\n--save-calibrators given but verdict was DOES NOT IMPROVE -- not saving anything.")
+                print(f"  [SAVED]   {g}: {calib_path}")
+            else:
+                print(f"  [SKIPPED] {g}: cross-fit score regressed, not saving {calib_path.name}")
+        n_saved = sum(per_group_improves.values())
+        print(f"\n{n_saved}/{len(KPX_GROUPS)} group calibrator(s) saved to {run_dir}")
 
-    return {"per_group": results, "overall_raw": overall_raw, "overall_calib": overall_calib}
+    return {
+        "per_group": results,
+        "per_group_improves": per_group_improves,
+        "overall_raw": overall_raw,
+        "overall_calib": overall_calib,
+    }
 
 
 if __name__ == "__main__":

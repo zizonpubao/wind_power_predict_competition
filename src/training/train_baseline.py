@@ -29,6 +29,7 @@ import yaml
 
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
 from src.evaluation.metrics import competition_score
+from src.features.feature_selection import load_selected_features
 from src.models.lgbm_model import DEFAULT_EARLY_STOPPING_ROUNDS, DEFAULT_PARAMS, GroupLGBMModel
 from src.validation.splitter import BlockTimeSeriesSplit
 
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 KPX_GROUPS = ("kpx_group_1", "kpx_group_2", "kpx_group_3")
 N_SPLITS = 5
+FEATURE_SETS = ("full", "pruned")
 
 # Columns present in the feature parquets that are identifiers/target, not
 # model inputs. Everything else in the parquet is a feature -- computed from
@@ -43,8 +45,36 @@ N_SPLITS = 5
 NON_FEATURE_COLS = {"forecast_kst_dtm", "data_available_kst_dtm", "target"}
 
 
-def _get_feature_cols(df: pd.DataFrame) -> list[str]:
-    return [c for c in df.columns if c not in NON_FEATURE_COLS]
+def _get_feature_cols(
+    df: pd.DataFrame, kpx_group: str | None = None, feature_set: str = "full"
+) -> list[str]:
+    """Return the model-input feature columns for one group's feature table.
+
+    ``feature_set="full"`` (default, unchanged behavior): every non-identifier/
+    target column in ``df``.
+    ``feature_set="pruned"``: the same columns, filtered down to
+    ``configs/selected_features.json``'s ``kpx_group`` entry (see
+    ``src/features/feature_selection.py``) -- a gain-based subset chosen to
+    reduce the ~141-features/~20-26k-rows overfitting risk flagged in
+    ``src/models/lgbm_model.py``. Requires ``kpx_group``.
+    """
+    all_cols = [c for c in df.columns if c not in NON_FEATURE_COLS]
+    if feature_set == "full":
+        return all_cols
+    if feature_set != "pruned":
+        raise ValueError(f"Unknown feature_set {feature_set!r}, expected one of {FEATURE_SETS}")
+
+    if kpx_group is None:
+        raise ValueError("kpx_group is required when feature_set='pruned'")
+    selected = load_selected_features(kpx_group)
+    selected_set = set(selected)
+    missing = selected_set - set(all_cols)
+    if missing:
+        raise ValueError(
+            f"configs/selected_features.json lists {len(missing)} feature(s) for {kpx_group} "
+            f"not present in this feature table: {sorted(missing)[:10]}"
+        )
+    return [c for c in all_cols if c in selected_set]
 
 
 def _get_git_commit() -> str | None:
@@ -62,8 +92,12 @@ def _get_git_commit() -> str | None:
         return None
 
 
-def run_group(kpx_group: str, n_splits: int = N_SPLITS) -> dict[str, Any]:
+def run_group(kpx_group: str, n_splits: int = N_SPLITS, feature_set: str = "full") -> dict[str, Any]:
     """Run block-aware CV + a final full-data refit for one kpx_group.
+
+    ``feature_set``: "full" (default, all feature columns) or "pruned" (see
+    ``_get_feature_cols``'s docstring) -- threaded straight through, no other
+    behavior changes.
 
     Returns a dict with: kpx_group, n_rows_used, n_missing_target_dropped,
     feature_cols, fold_metrics (list of per-fold dicts), agg_metrics
@@ -81,7 +115,7 @@ def run_group(kpx_group: str, n_splits: int = N_SPLITS) -> dict[str, Any]:
         len(df),
     )
 
-    feature_cols = _get_feature_cols(df)
+    feature_cols = _get_feature_cols(df, kpx_group=kpx_group, feature_set=feature_set)
     capacity = GROUP_CAPACITY_KWH[kpx_group]
 
     splitter = BlockTimeSeriesSplit(n_splits=n_splits)
@@ -202,16 +236,28 @@ def main() -> str:
 
     parser = argparse.ArgumentParser(description="Train the LightGBM baseline for all 3 KPX groups.")
     parser.add_argument("--n-splits", type=int, default=N_SPLITS)
+    parser.add_argument(
+        "--feature-set",
+        choices=FEATURE_SETS,
+        default="full",
+        help=(
+            "'full' (default): all feature columns. 'pruned': filter to "
+            "configs/selected_features.json's per-group gain-based selection "
+            "(see src/features/feature_selection.py)."
+        ),
+    )
     args = parser.parse_args()
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_lgbm_baseline"
+    if args.feature_set == "pruned":
+        run_id += "_pruned"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     all_results: dict[str, dict[str, Any]] = {}
     for kpx_group in KPX_GROUPS:
         logger.info("=== Running %s ===", kpx_group)
-        all_results[kpx_group] = run_group(kpx_group, n_splits=args.n_splits)
+        all_results[kpx_group] = run_group(kpx_group, n_splits=args.n_splits, feature_set=args.feature_set)
 
         model_path = run_dir / f"model_{kpx_group}.joblib"
         joblib.dump(all_results[kpx_group]["final_model"], model_path)
@@ -220,6 +266,7 @@ def main() -> str:
     config = {
         "run_id": run_id,
         "n_splits": args.n_splits,
+        "feature_set": args.feature_set,
         "model_default_params": DEFAULT_PARAMS,
         "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
         "git_commit": _get_git_commit(),

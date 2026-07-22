@@ -7,6 +7,16 @@ matching ``sample_submission.csv``'s exact schema and row order.
 straight from ``load_sample_submission()`` via a left join on
 ``forecast_kst_dtm``, per CLAUDE.md / the code-writer role brief.
 
+Feature columns for each group's ``model.predict()`` call come from that
+run's own ``config.yaml`` (``feature_cols_per_group``), not recomputed from
+the test parquet's columns -- this matters once a model can be trained on a
+pruned subset of columns (``src.training.train_baseline``/``tune_hyperparams``
+``--feature-set pruned``): LightGBM's sklearn wrapper requires prediction-time
+columns to match what it was fit on, so predicting on a wider "all columns"
+frame would either error or silently misalign. Falls back to "every
+non-identifier/target column" only if ``config.yaml`` or that key is missing
+(older runs), preserving old behavior for runs written before this existed.
+
 If ``experiments/<run_id>/calibrator_<group>.joblib`` exists (written by
 ``src.training.tune_hyperparams`` / ``src.training.evaluate_calibration
 --save-calibrators`` when the isotonic OOF-residual calibration was found to
@@ -27,6 +37,7 @@ import logging
 import joblib
 import numpy as np
 import pandas as pd
+import yaml
 
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, SUBMISSIONS_DIR
 from src.data.loaders import load_sample_submission
@@ -58,6 +69,13 @@ def generate_submission(run_id: str) -> pd.DataFrame:
     sample = load_sample_submission()
     submission = sample[["forecast_id", "forecast_kst_dtm"]].copy()
 
+    config_path = run_dir / "config.yaml"
+    run_feature_cols: dict[str, list[str]] = {}
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            run_config = yaml.safe_load(f) or {}
+        run_feature_cols = run_config.get("feature_cols_per_group") or {}
+
     for kpx_group in KPX_GROUPS:
         model_path = run_dir / f"model_{kpx_group}.joblib"
         if not model_path.exists():
@@ -66,7 +84,27 @@ def generate_submission(run_id: str) -> pd.DataFrame:
 
         test_path = DATA_PROCESSED_DIR / f"features_{kpx_group}_test.parquet"
         test_df = pd.read_parquet(test_path)
-        feature_cols = _get_feature_cols(test_df)
+
+        if kpx_group in run_feature_cols:
+            # Use the exact columns (and order) this group's model was
+            # trained on, per run_id's own config.yaml -- required for
+            # correctness once a model may have been fit on a pruned column
+            # subset (see module docstring).
+            feature_cols = run_feature_cols[kpx_group]
+            missing = [c for c in feature_cols if c not in test_df.columns]
+            if missing:
+                raise ValueError(
+                    f"{kpx_group}: {len(missing)} feature(s) from {config_path.name}'s "
+                    f"feature_cols_per_group are missing from the test parquet: {missing[:10]}"
+                )
+        else:
+            logger.warning(
+                "%s: %s has no feature_cols_per_group entry; falling back to all non-"
+                "identifier/target columns in the test parquet (pre-feature-pruning run).",
+                kpx_group,
+                config_path,
+            )
+            feature_cols = _get_feature_cols(test_df)
 
         preds = model.predict(test_df[feature_cols])
 

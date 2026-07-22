@@ -32,6 +32,7 @@ from typing import Any
 
 import joblib
 import numpy as np
+import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
 
@@ -78,3 +79,42 @@ class PredictionCalibrator:
     @staticmethod
     def load(path: Any) -> "PredictionCalibrator":
         return joblib.load(path)
+
+
+def cross_fit_calibrate(
+    oof_df: pd.DataFrame,
+    fold_col: str = "fold",
+    pred_col: str = "pred",
+    actual_col: str = "actual",
+) -> np.ndarray:
+    """Leave-one-fold-out cross-fit isotonic calibration of an OOF frame.
+
+    For every fold value present in ``oof_df[fold_col]``, fits a fresh
+    ``PredictionCalibrator`` on every OTHER fold's ``(pred_col, actual_col)``
+    pairs, then uses it to transform that fold's own ``pred_col`` values.
+    Returns a numpy array aligned with ``oof_df``'s row order, where no row
+    was ever transformed by a calibrator that saw that row (or any row
+    sharing its fold) during fitting.
+
+    This is the leak-free way to *evaluate* whether calibration helps a
+    genuinely held-out fold, as opposed to the production calibrator (fit on
+    ALL folds' pooled OOF pairs once an evaluation like this has shown a
+    genuine improvement) -- see ``src/training/evaluate_calibration.py``'s
+    module docstring for the full leakage argument. Shared by
+    ``evaluate_calibration.py`` and ``src/training/tune_hyperparams.py`` so
+    both make the exact same per-group "does calibration help?" decision the
+    exact same way.
+    """
+    calibrated = np.empty(len(oof_df), dtype=float)
+    folds = sorted(oof_df[fold_col].unique())
+    for fold_i in folds:
+        fit_mask = (oof_df[fold_col] != fold_i).to_numpy()
+        apply_mask = (oof_df[fold_col] == fold_i).to_numpy()
+
+        calibrator = PredictionCalibrator()
+        calibrator.fit(
+            oof_df.loc[fit_mask, pred_col].to_numpy(),
+            oof_df.loc[fit_mask, actual_col].to_numpy(),
+        )
+        calibrated[apply_mask] = calibrator.transform(oof_df.loc[apply_mask, pred_col].to_numpy())
+    return calibrated

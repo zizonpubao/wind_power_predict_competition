@@ -60,6 +60,11 @@ EXPERIMENTS_DIR = PROJECT_ROOT / "experiments"
 SUBMISSIONS_DIR = PROJECT_ROOT / "submissions"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
+# 그룹별 pruned feature 목록 (src/features/feature_selection.py가 생성/갱신).
+# configs/ 아래에 두는 이유: experiments/<run_id>/ 는 .gitignore 대상(런별 산출물)이라
+# 재현 가능한 "선택된 피처 목록"은 여기 버전관리되는 config로 둔다.
+SELECTED_FEATURES_JSON = PROJECT_ROOT / "configs" / "selected_features.json"
+
 # KPX 그룹 설비용량 (kWh, 1시간 기준)
 GROUP_CAPACITY_KWH = {
     "kpx_group_1": 21_600,

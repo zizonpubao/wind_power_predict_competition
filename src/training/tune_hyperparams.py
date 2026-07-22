@@ -22,6 +22,38 @@ Writes ``experiments/<run_id>_tuned/`` with the same config.yaml/metrics.json
 *shape* train_baseline.py writes (so evaluator/ensembler can consume either
 run interchangeably), plus a ``tuning_results.json`` with best params, best CV
 score, and every trial's params/value for later inspection.
+
+Calibration (per-group, automatic)
+-----------------------------------
+After tuning + final refit, ``main()`` also decides -- automatically, per
+KPX group -- whether an isotonic ``PredictionCalibrator`` (see
+``src/models/calibration.py``, motivated by
+``reports/eda/ficr_gap_diagnosis.md``'s systematic under-prediction finding)
+should be deployed for that group. This reuses the pooled OOF ``(pred,
+actual)`` pairs ``tune_group`` already computed while re-running CV with the
+winning hyperparameters (``oof_df``/``fold_meta``) -- it does **not** repeat
+the 5-fold model-fit loop a second time. The decision itself uses the same
+leave-one-fold-out cross-fit evaluation ``src/training/evaluate_calibration.py``
+implements (shared via ``src.models.calibration.cross_fit_calibrate``), and
+is made independently per group: ``reports/eda/group2_calibration_regression.md``
+found calibration genuinely helps kpx_group_1/kpx_group_3's leak-free CV score
+but *hurts* kpx_group_2's, even though the mean-of-3-groups score improves --
+so a group-by-group gate is required, never an overall/all-or-nothing one.
+Only groups whose own cross-fit score improves get a
+``calibrator_<group>.joblib`` written to the run directory; the others are
+skipped and ``src/inference/predict.py`` simply won't find a file to load for
+them. This makes calibration a normal, un-skippable part of one
+``tune_hyperparams.py`` run instead of a second manual step someone has to
+remember to run separately (see that same report's "Side finding" section for
+the persistence bug this replaces: a candidate calibrator used to be fit but
+never saved by any code path in this module).
+
+``src/training/evaluate_calibration.py`` remains useful as a standalone,
+read-only re-evaluation/diagnostic tool (e.g. re-checking calibration
+behavior for an already-completed run without re-running Optuna), and its
+own ``--save-calibrators`` flag still works the same per-group way for that
+case -- but for any *new* tuning run, this module's automatic per-group
+decision is the primary, no-extra-steps path.
 """
 from __future__ import annotations
 
@@ -42,9 +74,9 @@ import yaml
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
 from src.evaluation.metrics import competition_score
 from src.inference.predict import generate_submission
-from src.models.calibration import PredictionCalibrator
+from src.models.calibration import PredictionCalibrator, cross_fit_calibrate
 from src.models.lgbm_model import DEFAULT_EARLY_STOPPING_ROUNDS, DEFAULT_PARAMS, GroupLGBMModel
-from src.training.train_baseline import KPX_GROUPS, N_SPLITS, _get_feature_cols, _get_git_commit
+from src.training.train_baseline import FEATURE_SETS, KPX_GROUPS, N_SPLITS, _get_feature_cols, _get_git_commit
 from src.validation.splitter import BlockTimeSeriesSplit
 
 logger = logging.getLogger(__name__)
@@ -58,7 +90,19 @@ BASELINE_RUN_ID = "20260720_160818_lgbm_baseline"
 
 
 def _suggest_params(trial: optuna.Trial) -> dict[str, Any]:
-    """Search space sized for a ~20-26k row / 141-feature CPU LightGBM regression."""
+    """Search space sized for a ~20-26k row / 141-feature CPU LightGBM regression.
+
+    ``asymmetry_alpha`` (reports/eda/ficr_gap_diagnosis.md priority #2):
+    searched over ``[0.5, 0.9]`` and *always* passed through to
+    ``GroupLGBMModel`` (rather than a separate on/off toggle), because
+    ``alpha=0.5`` is mathematically identical to LightGBM's plain squared-
+    error objective (see ``src/models/lgbm_model.py``'s
+    ``asymmetric_squared_error_grad_hess`` docstring) -- so the low end of
+    this range already covers "don't use the asymmetric loss" without a
+    second categorical parameter complicating the search space. Optuna's TPE
+    sampler is therefore free to converge back toward 0.5 if the asymmetric
+    loss doesn't actually help a given group.
+    """
     return {
         "num_leaves": trial.suggest_int("num_leaves", 7, 63),
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
@@ -67,6 +111,7 @@ def _suggest_params(trial: optuna.Trial) -> dict[str, Any]:
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
         "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
         "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+        "asymmetry_alpha": trial.suggest_float("asymmetry_alpha", 0.5, 0.9),
     }
 
 
@@ -207,12 +252,20 @@ def _make_objective(df: pd.DataFrame, feature_cols: list[str], capacity: float, 
     return objective
 
 
-def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLITS) -> dict[str, Any]:
+def tune_group(
+    kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLITS, feature_set: str = "full"
+) -> dict[str, Any]:
     """Run an Optuna study for one kpx_group, then refit a final GroupLGBMModel
     on all available rows using the best-found hyperparameters (same
     average-CV-best_iteration-as-n_estimators approach train_baseline.run_group
     uses). Returns a dict with everything needed to write config.yaml,
     metrics.json, tuning_results.json and the model artifact.
+
+    ``feature_set``: "full" (default) or "pruned" -- see
+    ``train_baseline._get_feature_cols``'s docstring; threaded straight
+    through to both the Optuna search and the final refit, so a pruned tuning
+    run re-searches hyperparameters against the smaller column set rather
+    than reusing hyperparameters tuned for 141 columns.
     """
     path = DATA_PROCESSED_DIR / f"features_{kpx_group}_train.parquet"
     df = pd.read_parquet(path)
@@ -221,7 +274,7 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
     df = df.dropna(subset=["target"]).reset_index(drop=True)
     logger.info("%s: dropped %d rows with missing target, %d rows remain", kpx_group, n_missing, len(df))
 
-    feature_cols = _get_feature_cols(df)
+    feature_cols = _get_feature_cols(df, kpx_group=kpx_group, feature_set=feature_set)
     capacity = GROUP_CAPACITY_KWH[kpx_group]
 
     sampler = optuna.samplers.TPESampler(seed=SAMPLER_SEED)
@@ -281,17 +334,22 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
         final_model.params["n_estimators"],
     )
 
-    # Production PredictionCalibrator: isotonic pred -> actual mapping fit on
+    # Candidate PredictionCalibrator: isotonic pred -> actual mapping fit on
     # ALL 5 folds' pooled OOF pairs (not cross-fit -- there is no held-out set
     # left to protect for a deployed artifact, exactly like final_model above
-    # uses all rows). Wired in per reports/eda/ficr_gap_diagnosis.md's #1
-    # recommendation and validated by src/training/evaluate_calibration.py's
-    # leak-free cross-fit evaluation, which found a genuine (if modest)
-    # overall CV score improvement (0.5759 -> 0.5785) on the
-    # 20260720_161850_lgbm_tuned best_params -- see that script's docstring
-    # for the leakage-avoidance method used to validate this.
-    calibrator = PredictionCalibrator().fit(oof_df["pred"].to_numpy(), oof_df["actual"].to_numpy())
-    logger.info("%s: fit production PredictionCalibrator on %d pooled OOF rows", kpx_group, len(oof_df))
+    # uses all rows). This is only a CANDIDATE -- it is fit here so main() can
+    # reuse oof_df/fold_meta without re-running CV, but whether it actually
+    # gets saved to disk is decided per group by main()'s leak-free cross-fit
+    # evaluation (see module docstring / reports/eda/group2_calibration_regression.md):
+    # a group whose own cross-fit score regresses under calibration does NOT
+    # get a calibrator_<group>.joblib written, regardless of this fit.
+    candidate_calibrator = PredictionCalibrator().fit(oof_df["pred"].to_numpy(), oof_df["actual"].to_numpy())
+    logger.info(
+        "%s: fit candidate PredictionCalibrator on %d pooled OOF rows (not yet saved -- "
+        "main() decides per-group via leak-free cross-fit evaluation)",
+        kpx_group,
+        len(oof_df),
+    )
 
     trials_records = [
         {
@@ -319,8 +377,71 @@ def tune_group(kpx_group: str, n_trials: int = N_TRIALS, n_splits: int = N_SPLIT
         "final_model": final_model,
         "final_params": final_params,
         "final_n_estimators": final_model.params["n_estimators"],
-        "calibrator": calibrator,
+        "oof_df": oof_df,
+        "fold_meta": fold_meta,
+        "candidate_calibrator": candidate_calibrator,
     }
+
+
+def _evaluate_and_save_calibrators(
+    all_results: dict[str, dict[str, Any]], run_dir: Path
+) -> dict[str, dict[str, Any]]:
+    """Per-group leak-free decision of whether to deploy this run's candidate
+    calibrator, then save ``calibrator_<group>.joblib`` for exactly the
+    groups where it helps (see module docstring).
+
+    Reuses each group's already-computed ``oof_df``/``fold_meta`` from
+    ``tune_group`` (no CV re-run) -- only the cheap leave-one-fold-out
+    cross-fit calibration + rescoring is done here, via the same
+    ``cross_fit_calibrate``/``_score_oof`` ``evaluate_calibration.py`` uses.
+
+    Returns a dict per group: ``{"raw_score_mean", "calib_score_mean",
+    "delta", "saved"}``, and also prints a table + writes
+    ``calibration_decision.json`` to ``run_dir`` for auditability.
+    """
+    decisions: dict[str, dict[str, Any]] = {}
+    print("\n=== Per-group calibration decision (leak-free cross-fit) ===")
+    header = f"{'group':<14}{'raw':>10}{'calibrated':>12}{'delta':>10}   verdict"
+    print(header)
+    print("-" * len(header))
+    for g in KPX_GROUPS:
+        r = all_results[g]
+        oof_df = r["oof_df"].copy()
+        fold_meta = r["fold_meta"]
+        oof_df["pred_calibrated"] = cross_fit_calibrate(oof_df)
+
+        raw_fold_metrics = _score_oof(oof_df, fold_meta, g, pred_col="pred")
+        calib_fold_metrics = _score_oof(oof_df, fold_meta, g, pred_col="pred_calibrated")
+        raw_score = float(np.nanmean([f["score"] for f in raw_fold_metrics]))
+        calib_score = float(np.nanmean([f["score"] for f in calib_fold_metrics]))
+        improves = calib_score > raw_score
+
+        calib_path = run_dir / f"calibrator_{g}.joblib"
+        if improves:
+            r["candidate_calibrator"].save(calib_path)
+            logger.info("%s: cross-fit score improved (%.4f -> %.4f); saved %s", g, raw_score, calib_score, calib_path)
+            verdict = "IMPROVES -> saved"
+        else:
+            logger.info(
+                "%s: cross-fit score did not improve (%.4f -> %.4f); calibrator NOT saved", g, raw_score, calib_score
+            )
+            verdict = "REGRESSES -> skipped"
+
+        print(f"{g:<14}{raw_score:>10.4f}{calib_score:>12.4f}{calib_score - raw_score:>10.4f}   {verdict}")
+        decisions[g] = {
+            "raw_score_mean": raw_score,
+            "calib_score_mean": calib_score,
+            "delta": calib_score - raw_score,
+            "saved": improves,
+        }
+    print("-" * len(header))
+    n_saved = sum(1 for d in decisions.values() if d["saved"])
+    print(f"{n_saved}/{len(KPX_GROUPS)} group calibrator(s) saved to {run_dir}")
+
+    with open(run_dir / "calibration_decision.json", "w", encoding="utf-8") as f:
+        json.dump(decisions, f, indent=2)
+
+    return decisions
 
 
 def _load_baseline_metrics() -> dict[str, Any] | None:
@@ -340,20 +461,46 @@ def main() -> str:
     parser.add_argument("--n-trials", type=int, default=N_TRIALS)
     parser.add_argument("--n-splits", type=int, default=N_SPLITS)
     parser.add_argument("--skip-submission", action="store_true", help="Skip generating a submission CSV at the end.")
+    parser.add_argument(
+        "--feature-set",
+        choices=FEATURE_SETS,
+        default="full",
+        help=(
+            "'full' (default): all feature columns. 'pruned': filter to "
+            "configs/selected_features.json's per-group gain-based selection "
+            "(see src/features/feature_selection.py), then re-tune from scratch "
+            "on the smaller column set."
+        ),
+    )
     args = parser.parse_args()
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_lgbm_tuned"
+    if args.feature_set == "pruned":
+        run_id += "_pruned"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     all_results: dict[str, dict[str, Any]] = {}
     for kpx_group in KPX_GROUPS:
         logger.info("=== Tuning %s (%d trials) ===", kpx_group, args.n_trials)
-        all_results[kpx_group] = tune_group(kpx_group, n_trials=args.n_trials, n_splits=args.n_splits)
+        all_results[kpx_group] = tune_group(
+            kpx_group, n_trials=args.n_trials, n_splits=args.n_splits, feature_set=args.feature_set
+        )
 
         model_path = run_dir / f"model_{kpx_group}.joblib"
         joblib.dump(all_results[kpx_group]["final_model"], model_path)
         logger.info("Saved final tuned model: %s", model_path)
+
+    # --- Per-group calibration decision + conditional save (see module
+    # docstring): reuses each group's oof_df/fold_meta already computed
+    # above, no CV re-run. Only groups whose own leak-free cross-fit score
+    # improves get a calibrator_<group>.joblib written. ---
+    calibration_decisions = _evaluate_and_save_calibrators(all_results, run_dir)
+    logger.info(
+        "Calibration decisions written to %s: %s",
+        run_dir / "calibration_decision.json",
+        {g: calibration_decisions[g]["saved"] for g in KPX_GROUPS},
+    )
 
     # --- config.yaml: same top-level shape as train_baseline.py's, plus
     # tuning-specific extras, so evaluator/ensembler can read either run's
@@ -361,6 +508,7 @@ def main() -> str:
     config = {
         "run_id": run_id,
         "n_splits": args.n_splits,
+        "feature_set": args.feature_set,
         "model_default_params": DEFAULT_PARAMS,
         "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
         "git_commit": _get_git_commit(),
