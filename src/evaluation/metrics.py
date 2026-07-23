@@ -41,6 +41,19 @@ DEFAULT_GROUP_COLS = ["kpx_group_1", "kpx_group_2", "kpx_group_3"]
 DEFAULT_KEY_COL = "forecast_kst_dtm"
 DEFAULT_MIN_UTILIZATION = 0.10
 
+# FICR settlement-rate tier table (see docstring above / ficr_formula.md
+# "확정" section). Named module-level constants -- rather than the bare 0.06/
+# 0.08/4.0/3.0 literals this module used to have inline in ``ficr_per_group``
+# -- specifically so other modules that need the exact same confirmed
+# tier boundaries/rates (e.g. ``src/features/decision_optimize.py``'s
+# decision-theoretic post-processing) can import them instead of re-deriving
+# or re-hardcoding the same numbers a second time.
+FICR_TIER1_NMAE_THRESHOLD = 0.06  # nmae_h <= this -> top rate
+FICR_TIER2_NMAE_THRESHOLD = 0.08  # this < nmae_h <= 0.08 -> mid rate; > 0.08 -> zero
+FICR_TIER1_RATE = 4.0  # 원/kWh
+FICR_TIER2_RATE = 3.0  # 원/kWh
+FICR_TIER3_RATE = 0.0  # 원/kWh (beyond the 8% tier -- no settlement)
+
 
 def _eligible_mask(actual: pd.Series, capacity_kwh: float, min_utilization: float) -> pd.Series:
     """실제 발전량이 설비용량의 min_utilization 이상인 시간대만 True."""
@@ -125,9 +138,13 @@ def ficr_per_group(
     a = actual[mask]
     nmae_h = (p - a).abs() / capacity_kwh
 
-    rate_h = np.where(nmae_h <= 0.06, 4.0, np.where(nmae_h <= 0.08, 3.0, 0.0))
+    rate_h = np.where(
+        nmae_h <= FICR_TIER1_NMAE_THRESHOLD,
+        FICR_TIER1_RATE,
+        np.where(nmae_h <= FICR_TIER2_NMAE_THRESHOLD, FICR_TIER2_RATE, FICR_TIER3_RATE),
+    )
     earned = float(np.sum(rate_h * a.to_numpy()))
-    max_possible = float(np.sum(4.0 * a.to_numpy()))
+    max_possible = float(np.sum(FICR_TIER1_RATE * a.to_numpy()))
 
     if max_possible == 0:
         # Edge case: eligible hours exist but their actual generation sums to 0
