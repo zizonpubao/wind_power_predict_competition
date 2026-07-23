@@ -39,7 +39,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from scipy.stats import norm
 
+from src.features.decision_optimize import QUANTILES
 from src.models.torch_common import (
     BLOCK_COL,
     DEVICE,
@@ -281,23 +283,28 @@ class GroupLSTMModel:
         return best_state
 
     # -- inference -------------------------------------------------------
-    def predict(self, df: pd.DataFrame) -> np.ndarray:
-        """Predict generation (kWh) for every row of ``df``, returned aligned to
-        ``df``'s exact row order and count.
+    def predict_seed_matrix(self, df: pd.DataFrame) -> np.ndarray:
+        """Per-seed predictions, row-aligned: shape ``(n_rows, n_seeds)``.
 
-        ``df`` must contain ``feature_cols`` + ``block_col`` + ``dt_col`` (no
-        target needed). Predictions are averaged over the bagged seed models,
-        scaled back to kWh, and clipped to ``[0, capacity*1.01]``.
+        Column ``s`` is the ``s``-th bagged seed model's own generation
+        prediction (kWh) for every row of ``df``, scattered back to ``df``'s
+        exact row order/count and clipped per-seed to ``[0, capacity*1.01]``
+        (the identical clip ``predict`` applies). ``predict`` is exactly the
+        row-wise mean of this matrix; ``predict_quantiles`` reads its row-wise
+        mean/std. Exposing the individual seeds is what lets the seed-bagged
+        network act as a (crude) predictive-distribution estimator for the
+        distributional ensemble (see ``predict_quantiles``).
         """
         if not self.state_dicts_:
-            raise RuntimeError("GroupLSTMModel.predict() called before fit().")
+            raise RuntimeError("GroupLSTMModel.predict_seed_matrix() called before fit().")
         X_seq, _Y, pos_idx, _blocks = build_block_sequences(
             df, self.feature_cols, None, self.block_col, self.dt_col
         )
         X_scaled = self.scaler.transform(X_seq)
         Xt = torch.tensor(X_scaled, dtype=torch.float32, device=DEVICE)
 
-        seed_preds: list[np.ndarray] = []
+        flat_idx = pos_idx.ravel()
+        seed_cols: list[np.ndarray] = []
         for state in self.state_dicts_:
             model = LSTMPointModel(self.n_features, self.hidden_size, self.layers, self.dropout)
             model.load_state_dict(state)  # state_dicts are CPU tensors
@@ -305,12 +312,54 @@ class GroupLSTMModel:
             model.eval()
             with torch.no_grad():
                 p = model(Xt).cpu().numpy()  # (n_blocks, seq_len)
-            seed_preds.append(np.clip(p * self.capacity_kwh, 0.0, self.capacity_kwh * 1.01))
+            p = np.clip(p * self.capacity_kwh, 0.0, self.capacity_kwh * 1.01)
+            out = np.empty(len(df), dtype=float)
+            out[flat_idx] = p.ravel()
+            seed_cols.append(out)
+        return np.stack(seed_cols, axis=1)  # (n_rows, n_seeds)
 
-        pred_seq = np.mean(seed_preds, axis=0)  # (n_blocks, seq_len)
-        out = np.empty(len(df), dtype=float)
-        out[pos_idx.ravel()] = pred_seq.ravel()
-        return out
+    def predict(self, df: pd.DataFrame) -> np.ndarray:
+        """Predict generation (kWh) for every row of ``df``, returned aligned to
+        ``df``'s exact row order and count.
+
+        ``df`` must contain ``feature_cols`` + ``block_col`` + ``dt_col`` (no
+        target needed). Predictions are averaged over the bagged seed models,
+        scaled back to kWh, and clipped to ``[0, capacity*1.01]`` -- i.e. the
+        row-wise mean of ``predict_seed_matrix``. Unchanged, backward-compatible
+        behavior (the pre-distributional point predictor).
+        """
+        return self.predict_seed_matrix(df).mean(axis=1)
+
+    def predict_quantiles(
+        self, df: pd.DataFrame, levels: list[float] | np.ndarray = QUANTILES
+    ) -> np.ndarray:
+        """Gaussian predictive quantiles from the seed bag: ``(n_rows, len(levels))``.
+
+        For each row, the ``n_seeds`` per-seed predictions
+        (``predict_seed_matrix``) are summarized by their mean and (population,
+        ``ddof=0``) std, and quantile level ``q`` is
+        ``mean + std * norm.ppf(q)``, then clipped to ``[0, capacity_kwh]``.
+
+        Consistency: at ``level=0.5`` (``norm.ppf(0.5)==0``) the value is exactly
+        the seed mean, i.e. identical to ``predict`` (the median IS the point
+        prediction) whenever that mean is within ``[0, capacity_kwh]`` -- the
+        only divergence is that ``predict`` keeps a 1% capacity safety margin
+        (clip to ``capacity*1.01``) while quantiles clip to the hard capacity
+        bound. Degenerate ``std -> 0`` (e.g. ``n_seeds==1``) collapses every
+        level onto that mean, as intended.
+
+        Known limitation: with only a handful of seeds (LSTM defaults to 6,
+        Transformer 4) the per-row std is a very rough spread estimate -- these
+        are seed-bag Gaussians, not calibrated predictive quantiles; treat the
+        resulting distribution as a coarse uncertainty proxy for the
+        distributional blend, not a trustworthy per-row interval.
+        """
+        seed_mat = self.predict_seed_matrix(df)
+        mean = seed_mat.mean(axis=1)
+        std = seed_mat.std(axis=1)  # ddof=0: n_seeds==1 -> std 0 -> quantiles collapse to mean
+        z = norm.ppf(np.asarray(levels, dtype=float))
+        q = mean[:, None] + std[:, None] * z[None, :]
+        return np.clip(q, 0.0, self.capacity_kwh)
 
     # -- persistence -----------------------------------------------------
     def save(self, path: Any) -> None:

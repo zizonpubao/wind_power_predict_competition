@@ -36,7 +36,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from scipy.stats import norm
 
+from src.features.decision_optimize import QUANTILES
 from src.models.lstm_model import (
     LOW_UTILIZATION_SAMPLE_WEIGHT,
     VALID_HOUR_UTILIZATION,
@@ -294,19 +296,25 @@ class GroupTransformerModel:
         return best_state
 
     # -- inference -------------------------------------------------------
-    def predict(self, df: pd.DataFrame) -> np.ndarray:
-        """Predict generation (kWh) for every row of ``df``, aligned to ``df``'s
-        exact row order and count. Predictions are averaged over the bagged seed
-        models, scaled back to kWh, and clipped to ``[0, capacity*1.01]``."""
+    def predict_seed_matrix(self, df: pd.DataFrame) -> np.ndarray:
+        """Per-seed predictions, row-aligned: shape ``(n_rows, n_seeds)``.
+
+        Same contract as ``GroupLSTMModel.predict_seed_matrix`` (column ``s`` is
+        the ``s``-th bagged seed's kWh prediction for every row of ``df``,
+        scattered to ``df``'s row order and per-seed clipped to
+        ``[0, capacity*1.01]``); ``predict`` is its row-wise mean and
+        ``predict_quantiles`` reads its row-wise mean/std.
+        """
         if not self.state_dicts_:
-            raise RuntimeError("GroupTransformerModel.predict() called before fit().")
+            raise RuntimeError("GroupTransformerModel.predict_seed_matrix() called before fit().")
         X_seq, _Y, pos_idx, _blocks = build_block_sequences(
             df, self.feature_cols, None, self.block_col, self.dt_col
         )
         X_scaled = self.scaler.transform(X_seq)
         Xt = torch.tensor(X_scaled, dtype=torch.float32, device=DEVICE)
 
-        seed_preds: list[np.ndarray] = []
+        flat_idx = pos_idx.ravel()
+        seed_cols: list[np.ndarray] = []
         for state in self.state_dicts_:
             model = self._new_module()
             model.load_state_dict(state)  # state_dicts are CPU tensors
@@ -314,12 +322,37 @@ class GroupTransformerModel:
             model.eval()
             with torch.no_grad():
                 p = model(Xt).cpu().numpy()  # (n_blocks, seq_len)
-            seed_preds.append(np.clip(p * self.capacity_kwh, 0.0, self.capacity_kwh * 1.01))
+            p = np.clip(p * self.capacity_kwh, 0.0, self.capacity_kwh * 1.01)
+            out = np.empty(len(df), dtype=float)
+            out[flat_idx] = p.ravel()
+            seed_cols.append(out)
+        return np.stack(seed_cols, axis=1)  # (n_rows, n_seeds)
 
-        pred_seq = np.mean(seed_preds, axis=0)  # (n_blocks, seq_len)
-        out = np.empty(len(df), dtype=float)
-        out[pos_idx.ravel()] = pred_seq.ravel()
-        return out
+    def predict(self, df: pd.DataFrame) -> np.ndarray:
+        """Predict generation (kWh) for every row of ``df``, aligned to ``df``'s
+        exact row order and count -- the row-wise mean of ``predict_seed_matrix``
+        (averaged over bagged seeds, clipped to ``[0, capacity*1.01]``).
+        Unchanged, backward-compatible point-predictor behavior."""
+        return self.predict_seed_matrix(df).mean(axis=1)
+
+    def predict_quantiles(
+        self, df: pd.DataFrame, levels: list[float] | np.ndarray = QUANTILES
+    ) -> np.ndarray:
+        """Gaussian predictive quantiles from the seed bag: ``(n_rows, len(levels))``.
+
+        Identical construction to ``GroupLSTMModel.predict_quantiles`` -- per-row
+        seed mean/std (``ddof=0``) -> ``mean + std * norm.ppf(level)`` -> clip to
+        ``[0, capacity_kwh]``, with ``level=0.5`` equal to ``predict`` (the seed
+        mean) up to the 1% capacity-margin clip difference. The Transformer bags
+        only 4 seeds by default, so its std is an even rougher spread estimate
+        than the LSTM's -- see that method's "Known limitation" note.
+        """
+        seed_mat = self.predict_seed_matrix(df)
+        mean = seed_mat.mean(axis=1)
+        std = seed_mat.std(axis=1)  # ddof=0: single-seed -> std 0 -> quantiles collapse to mean
+        z = norm.ppf(np.asarray(levels, dtype=float))
+        q = mean[:, None] + std[:, None] * z[None, :]
+        return np.clip(q, 0.0, self.capacity_kwh)
 
     # -- persistence -----------------------------------------------------
     def save(self, path: Any) -> None:

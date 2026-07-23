@@ -128,3 +128,35 @@ def test_no_mixup_knob():
     assert not hasattr(model, "apply_mixup")
     with pytest.raises(TypeError):
         GroupTransformerModel(CAPACITY, FEATURES, apply_mixup=True)
+
+
+# ---------------------------------------------------------------------------
+# distributional extension: predict_seed_matrix / predict_quantiles
+# ---------------------------------------------------------------------------
+
+
+def test_predict_seed_matrix_shape_and_predict_is_its_mean():
+    df = _make_block_df(6)
+    model = GroupTransformerModel(CAPACITY, FEATURES, n_seeds=3, max_epochs=2, patience=2).fit(df)
+    seed_mat = model.predict_seed_matrix(df)
+    assert seed_mat.shape == (len(df), 3)
+    np.testing.assert_allclose(model.predict(df), seed_mat.mean(axis=1), rtol=1e-6, atol=1e-6)
+
+
+def test_predict_quantiles_shape_monotonic_and_median_equals_point():
+    from src.features.decision_optimize import QUANTILES
+
+    df = _make_block_df(6)
+    model = GroupTransformerModel(CAPACITY, FEATURES, n_seeds=4, max_epochs=2, patience=2).fit(df)
+    q = model.predict_quantiles(df)
+    assert q.shape == (len(df), len(QUANTILES))
+    assert (np.diff(q, axis=1) >= -1e-6).all()
+    median = q[:, QUANTILES.index(0.5)]
+    np.testing.assert_allclose(median, np.clip(model.predict(df), 0.0, CAPACITY), rtol=1e-6, atol=1e-4)
+
+
+def test_predict_quantiles_single_seed_collapses_to_point():
+    df = _make_block_df(5)
+    model = _tiny_model().fit(df)  # n_seeds=1
+    q = model.predict_quantiles(df)
+    assert np.allclose(q - q[:, :1], 0.0, atol=1e-6)
