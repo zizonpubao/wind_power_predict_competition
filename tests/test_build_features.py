@@ -64,6 +64,24 @@ def test_build_feature_table_train_no_leakage_and_expected_columns(one_week_fram
         "lead_hour",
         "ldaps_10m_speed_idw_roll_mean_3h",
         "target",
+        # Phase A additions (wind_shear.py / calendar_features.py, see
+        # build_features.py's module docstring):
+        "ldaps_ws_hub_fixed",
+        "ldaps_ws_hub_fixed_cubed",
+        "gfs_ws_hub_fixed",
+        "gfs_ws_hub_fixed_cubed",
+        "gfs_ws_hub_est",
+        "gfs_ws_hub_est_cubed",
+        "month",
+        "hour",
+        "dayofweek",
+        "dayofyear",
+        "month_sin",
+        "month_cos",
+        "hour_sin",
+        "hour_cos",
+        "dayofyear_sin",
+        "lead_hours",
     }
     missing = expected_cols - set(out.columns)
     assert not missing, f"missing expected columns: {missing}"
@@ -110,3 +128,18 @@ def test_lead_hour_resets_within_each_data_available_block(one_week_frames):
     # show up as lead_hour counting past a block boundary.
     max_lead_per_block = out.groupby("data_available_kst_dtm")["lead_hour"].max()
     assert (max_lead_per_block <= 24).all()
+
+
+def test_lead_hours_is_always_positive(one_week_frames):
+    # Phase A leakage-safety check (add_lead_hours, calendar_features.py):
+    # every row's forecast_kst_dtm must be strictly after its
+    # data_available_kst_dtm, so the continuous `lead_hours` column must be
+    # > 0 everywhere -- the integration-level counterpart of the pure-function
+    # unit test in tests/test_calendar_features.py. Checked on both splits.
+    ldaps_small, gfs_small = one_week_frames
+
+    out_train = _assemble_feature_table(ldaps_small, gfs_small, "train", "kpx_group_1")
+    assert (out_train["lead_hours"] > 0).all()
+
+    out_test = _assemble_feature_table(ldaps_small, gfs_small, "test", "kpx_group_1")
+    assert (out_test["lead_hours"] > 0).all()

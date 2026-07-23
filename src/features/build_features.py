@@ -85,6 +85,46 @@ Wake-alignment features (kpx_group_2 only)
 direction is with the geometric wake axis from the upwind ``kpx_group_1``
 farm (``reports/domain_research/wake_effect.md``). kpx_group_1/3 do not get
 these columns; see that module's docstring for why.
+
+Hub-height wind-shear extrapolation (LDAPS/GFS, all groups)
+--------------------------------------------------------------
+``_add_wind_shear_features`` (called from ``_build_source_features``, right
+after ``_idw_speed_and_power_curve`` -- the earliest point each source's
+per-level IDW speed columns are all available on the same frame) extrapolates
+wind speed to the turbines' 117m hub height via
+``src.features.wind_shear.power_law_extrapolate``:
+  - **LDAPS**: only a fixed-shear-exponent (Hellman 1/7 approximation)
+    version is possible, extrapolated from ``ldaps_10m_speed_idw`` --
+    ``ldaps_ws_hub_fixed`` / ``ldaps_ws_hub_fixed_cubed``. LDAPS has no
+    second clean vector level to estimate a real exponent from (see
+    weather_features.py's module docstring on why its 50m fields are
+    excluded everywhere).
+  - **GFS**: has clean 80m *and* 100m levels, so a per-row shear exponent is
+    estimated from those two via ``wind_shear.estimate_shear_exponent``
+    (falling back to the fixed 1/7 constant wherever that estimate is NaN --
+    non-positive wind speed at either level), then used to extrapolate from
+    the 100m level (the closer of the two to 117m) to hub height --
+    ``gfs_ws_hub_est`` / ``gfs_ws_hub_est_cubed``. A fixed-alpha comparison
+    version from the *same* 100m reference level is also produced --
+    ``gfs_ws_hub_fixed`` / ``gfs_ws_hub_fixed_cubed`` -- so the two GFS
+    columns differ only in which alpha was used, isolating that one
+    variable. Every ``ws_hub`` column also gets a ``_cubed`` counterpart
+    (``.clip(lower=0) ** 3``, guarding against a negative extrapolated speed
+    feeding a cubic power-in-wind proxy with the wrong sign) -- wind power is
+    proportional to v**3, so this is a cheap physically-motivated nonlinear
+    transform on top of the extrapolated speed itself.
+
+Calendar / lead-time features (group/source-agnostic, computed once)
+------------------------------------------------------------------------
+``_assemble_feature_table`` calls ``src.features.calendar_features``'s
+``add_calendar_features``/``add_lead_hours`` exactly once, right after
+``lag_rolling_features`` and before the kpx_group_2-only wake-feature branch
+(these two are unrelated to any particular group or weather source, so there
+is nothing to scope per-branch). ``add_lead_hours``'s ``lead_hours`` (plural,
+continuous hour-fraction between issuance and the forecast hour) is a
+**different column** from ``lag_rolling_features``'s ``lead_hour`` (singular,
+1-indexed integer position within a ``data_available_kst_dtm`` block) -- see
+that module's docstring for why both exist and must not be conflated.
 """
 from __future__ import annotations
 
@@ -95,6 +135,7 @@ import pandas as pd
 
 from configs.paths import DATA_PROCESSED_DIR
 from src.data.loaders import load_gfs, load_ldaps, load_train_labels
+from src.features.calendar_features import add_calendar_features, add_lead_hours
 from src.features.wake_features import add_group1_group2_wake_features
 from src.features.weather_features import (
     KPX_GROUP_TURBINE_MODEL,
@@ -104,6 +145,7 @@ from src.features.weather_features import (
     spatial_aggregate,
     wind_speed_direction,
 )
+from src.features.wind_shear import DEFAULT_SHEAR_EXPONENT, estimate_shear_exponent, power_law_extrapolate
 
 logger = logging.getLogger(__name__)
 
@@ -171,20 +213,65 @@ def _idw_speed_and_power_curve(
     return spatial_df
 
 
+def _add_wind_shear_features(spatial_df: pd.DataFrame, source: str) -> pd.DataFrame:
+    """Add hub-height (117m) wind-speed extrapolation columns, wired to
+    `source`'s already-computed IDW speed columns (called right after
+    `_idw_speed_and_power_curve`). See the module docstring's "Hub-height
+    wind-shear extrapolation" section for the full rationale.
+
+    Adds (mutates and returns spatial_df):
+      source="ldaps": ldaps_ws_hub_fixed, ldaps_ws_hub_fixed_cubed
+      source="gfs":   gfs_ws_hub_fixed, gfs_ws_hub_fixed_cubed,
+                      gfs_ws_hub_est,   gfs_ws_hub_est_cubed
+    """
+
+    def _cubed(v: pd.Series) -> pd.Series:
+        return v.clip(lower=0.0) ** 3
+
+    if source == "ldaps":
+        v_ref = spatial_df["ldaps_10m_speed_idw"]
+        ws_hub_fixed = power_law_extrapolate(v_ref, h_ref=10.0)
+        spatial_df["ldaps_ws_hub_fixed"] = ws_hub_fixed
+        spatial_df["ldaps_ws_hub_fixed_cubed"] = _cubed(ws_hub_fixed)
+    elif source == "gfs":
+        v80 = spatial_df["gfs_80m_speed_idw"]
+        v100 = spatial_df["gfs_100m_speed_idw"]
+        alpha_est = estimate_shear_exponent(v80, 80.0, v100, 100.0).fillna(DEFAULT_SHEAR_EXPONENT)
+
+        ws_hub_fixed = power_law_extrapolate(v100, h_ref=100.0)
+        ws_hub_est = power_law_extrapolate(v100, h_ref=100.0, alpha=alpha_est)
+
+        spatial_df["gfs_ws_hub_fixed"] = ws_hub_fixed
+        spatial_df["gfs_ws_hub_fixed_cubed"] = _cubed(ws_hub_fixed)
+        spatial_df["gfs_ws_hub_est"] = ws_hub_est
+        spatial_df["gfs_ws_hub_est_cubed"] = _cubed(ws_hub_est)
+    else:
+        raise ValueError(f"_add_wind_shear_features: unknown source {source!r}, expected 'ldaps' or 'gfs'")
+    return spatial_df
+
+
 def _build_source_features(
     df: pd.DataFrame,
     levels: list[tuple[str, str, str]],
     scalar_cols: list[str],
     kpx_group: str,
+    source: str,
 ) -> pd.DataFrame:
     """One row per forecast_kst_dtm: spatial_aggregate (IDW/nearest) over every
     level's u/v pair plus the source's scalar columns, IDW wind speed +
-    power-curve output per level, and wind_speed_direction's grid-mean
-    speed/circular-mean direction per level -- all merged on _BLOCK_COLS.
+    power-curve output per level, hub-height wind-shear extrapolation (see
+    module docstring), and wind_speed_direction's grid-mean speed/
+    circular-mean direction per level -- all merged on _BLOCK_COLS.
+
+    `source`: "ldaps" or "gfs" -- selects which wind_shear columns
+    `_add_wind_shear_features` produces (LDAPS has only a 10m level so only a
+    fixed-alpha version is possible; GFS has 80m/100m so an estimated-alpha
+    version is also produced).
     """
     value_cols = [col for u, v, _ in levels for col in (u, v)] + scalar_cols
     spatial = spatial_aggregate(df, kpx_group, value_cols)
     spatial = _idw_speed_and_power_curve(spatial, levels, kpx_group)
+    spatial = _add_wind_shear_features(spatial, source)
 
     merged = spatial
     for u_col, v_col, prefix in levels:
@@ -220,14 +307,22 @@ def _assemble_feature_table(
             only_gfs,
         )
 
-    ldaps_features = _build_source_features(ldaps_renamed, _LDAPS_LEVELS, _LDAPS_SCALAR_COLS, kpx_group)
-    gfs_features = _build_source_features(gfs_renamed, _GFS_LEVELS, _GFS_SCALAR_COLS, kpx_group)
+    ldaps_features = _build_source_features(ldaps_renamed, _LDAPS_LEVELS, _LDAPS_SCALAR_COLS, kpx_group, source="ldaps")
+    gfs_features = _build_source_features(gfs_renamed, _GFS_LEVELS, _GFS_SCALAR_COLS, kpx_group, source="gfs")
 
     merged = ldaps_features.merge(gfs_features, on=_BLOCK_COLS, how="outer")
 
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     merged = lag_rolling_features(merged, "data_available_kst_dtm", lag_value_cols, windows=_LAG_WINDOWS)
+
+    # Calendar/seasonality + lead-time features (group/source-agnostic,
+    # computed exactly once here regardless of kpx_group -- see module
+    # docstring's "Calendar / lead-time features" section for why
+    # `lead_hours` (plural) is a distinct column from lag_rolling_features'
+    # `lead_hour` (singular) above).
+    merged = add_calendar_features(merged, dt_col="forecast_kst_dtm")
+    merged = add_lead_hours(merged, forecast_col="forecast_kst_dtm", available_col="data_available_kst_dtm")
 
     if kpx_group == "kpx_group_2":
         # Wake-alignment features (reports/domain_research/wake_effect.md):
