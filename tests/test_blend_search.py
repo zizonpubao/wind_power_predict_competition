@@ -127,3 +127,91 @@ def test_load_joined_oof_raises_on_fold_mismatch_between_runs(tmp_path, monkeypa
 
     with pytest.raises(ValueError, match="fold assignment"):
         load_joined_oof({"a": "run_a", "b": "run_b"}, GROUP)
+
+
+# --- Phase E additions: generic --runs CLI parsing, fixed-weight comparison,
+# and mixed GBM/torch test-time prediction dispatch ----------------------------
+
+from src.ensembling.blend_search import (  # noqa: E402
+    _parse_kv,
+    _predict_group_test,
+    per_fold_mean_score,
+    weights_dict_to_tuple,
+)
+
+
+def test_parse_kv_parses_repeated_name_equals_value():
+    assert _parse_kv(["gbm=run_a", "lstm=run_b"]) == {"gbm": "run_a", "lstm": "run_b"}
+    assert _parse_kv(None) == {}
+    assert _parse_kv(["a=0.35", "b=0.65"], cast=float) == {"a": 0.35, "b": 0.65}
+
+
+def test_parse_kv_rejects_item_without_equals():
+    with pytest.raises(ValueError):
+        _parse_kv(["no_equals_here"])
+
+
+def test_weights_dict_to_tuple_aligns_to_model_order_and_defaults_zero():
+    assert weights_dict_to_tuple(["gbm", "lstm", "transformer"], {"gbm": 0.5, "lstm": 0.5}) == (0.5, 0.5, 0.0)
+
+
+def test_weights_dict_to_tuple_rejects_unknown_model_and_bad_sum():
+    with pytest.raises(ValueError, match="unknown"):
+        weights_dict_to_tuple(["gbm", "lstm"], {"xxx": 1.0})
+    with pytest.raises(ValueError, match="sum to 1"):
+        weights_dict_to_tuple(["gbm", "lstm"], {"gbm": 0.3, "lstm": 0.3})
+
+
+def test_per_fold_mean_score_is_mean_of_per_fold_blend_scores():
+    df = _make_oof_df(n_per_fold=100, n_folds=5)
+    mean_s, per_fold = per_fold_mean_score(df, GROUP, ["good", "bad"], (1.0, 0.0))
+    # perfect model on every fold -> 1.0 each -> mean 1.0
+    assert set(per_fold) == {1, 2, 3, 4, 5}
+    assert mean_s == pytest.approx(1.0, abs=1e-6)
+    for s in per_fold.values():
+        assert s == pytest.approx(1.0, abs=1e-6)
+
+
+class _FakeGBM:
+    """Feature-matrix model: predict takes only the feature columns (no block key)."""
+
+    capacity_kwh = 21_600.0
+
+    def predict(self, X):
+        # would raise if handed the extra block/dt columns a sequence model needs
+        assert list(X.columns) == ["f0", "f1"], f"GBM got unexpected columns {list(X.columns)}"
+        return np.zeros(len(X))
+
+
+class _FakeSeq:
+    """Sequence model: predict needs the block key + datetime alongside features."""
+
+    capacity_kwh = 21_600.0
+    block_col = "data_available_kst_dtm"
+    dt_col = "forecast_kst_dtm"
+    feature_cols = ["f0", "f1"]
+
+    def predict(self, df):
+        assert self.block_col in df.columns and self.dt_col in df.columns, (
+            "sequence model was not handed its block/datetime columns"
+        )
+        return np.ones(len(df))
+
+
+def test_predict_group_test_dispatches_matrix_vs_sequence_models():
+    test_df = pd.DataFrame(
+        {
+            "f0": [1.0, 2.0, 3.0],
+            "f1": [4.0, 5.0, 6.0],
+            "data_available_kst_dtm": pd.date_range("2025-01-01", periods=3, freq="h"),
+            "forecast_kst_dtm": pd.date_range("2025-01-02", periods=3, freq="h"),
+        }
+    )
+    feats = ["f0", "f1"]
+    # GBM: called with exactly the feature columns (asserted inside _FakeGBM.predict)
+    gbm_out = _predict_group_test(_FakeGBM(), test_df, feats)
+    assert gbm_out.shape == (3,)
+    # Sequence model: called with feature cols PLUS block/dt (asserted inside _FakeSeq.predict)
+    seq_out = _predict_group_test(_FakeSeq(), test_df, feats)
+    assert seq_out.shape == (3,)
+    assert (seq_out == 1.0).all()

@@ -1,27 +1,41 @@
 """Per-KPX-group ensemble weight search over multiple already-trained models'
-OOF predictions (LightGBM / XGBoost / CatBoost, pruned feature set), validated
-with nested leave-one-fold-out (LOFO) CV so the reported score is not
-optimistic.
+OOF predictions, validated with nested leave-one-fold-out (LOFO) CV so the
+reported score is not optimistic.
 
-Why nested LOFO, not "fit weights on all 5 folds' OOF then re-score on that
-same OOF": that would let the grid search fit noise in the exact rows it is
-then judged on -- a blend that looks better on training-period metrics but
-was never evaluated the same way the base models were (CLAUDE.md's own
-"leakage" caution, and the ensembler agent brief's explicit warning). Instead,
-for each of the 5 CV folds k:
-  1. Grid-search the best (w_lgbm, w_xgb, w_cat) simplex weight (step 0.05,
-     weights >= 0, sum to 1) that maximizes the official ``competition_score``
-     on the OOF rows from the OTHER 4 folds pooled together.
+The weight-search machinery (``weight_grid``/``load_joined_oof``/
+``nested_lofo_search``/``generate_blend_submission``) is fully generic in
+``model_names``: it was written for the LightGBM/XGBoost/CatBoost pruned blend
+(``DEFAULT_RUNS``/``BASELINE_MODEL_NAME`` below) but takes any set of runs whose
+OOF predictions share the same CV splitter and label source. The v14 pipeline
+reproduction (Phase E) reuses it unchanged for a gbm-quantile / LSTM /
+Transformer blend by passing ``--runs name=run_id`` on the CLI -- see ``main``.
+
+Why nested LOFO, not "fit weights on all folds' OOF then re-score on that same
+OOF": that would let the grid search fit noise in the exact rows it is then
+judged on -- a blend that looks better on training-period metrics but was never
+evaluated the same way the base models were (CLAUDE.md's own "leakage" caution,
+and the ensembler agent brief's explicit warning). Instead, for each CV fold k:
+  1. Grid-search the best simplex weight (step 0.05, weights >= 0, sum to 1)
+     that maximizes the official ``competition_score`` on the OOF rows from the
+     OTHER folds pooled together.
   2. Freeze that weight and evaluate it on fold k's OOF rows alone (rows the
      weight search never saw).
-Averaging the 5 held-out scores gives a score directly comparable to each
-base model's own mean-of-5-folds CV score (same held-out rows, same metric).
+Averaging the held-out scores gives a score directly comparable to each base
+model's own mean-of-folds CV score (same held-out rows, same metric).
 
-A "production" weight (fit on all 5 folds pooled, maximum data) is also
-computed for deployment IF a group's nested LOFO score shows a genuine,
-fold-consistent improvement over the current-best LightGBM-alone run; groups
-that don't clear that bar fall back to pure LightGBM (weight (1,0,0)) rather
-than being forced into an ensemble that doesn't actually help.
+A "production" weight (fit on all folds pooled, maximum data) is also computed
+for deployment IF a group's nested LOFO score shows a genuine, fold-consistent
+improvement over the baseline model's own CV score; groups that don't clear
+that bar fall back to the pure baseline model (weight 1 on it) rather than
+being forced into an ensemble that doesn't actually help.
+
+Test-time note (torch models): the sequence models (LSTM/Transformer) don't
+keep a live ``nn.Module`` -- ``joblib.load`` restores a wrapper whose
+``predict`` takes a *DataFrame* carrying the forecast-block key + datetime, not
+a bare feature matrix like the GBM wrappers. ``_predict_group_test`` detects
+this via the wrapper's ``block_col``/``dt_col`` attributes and passes the extra
+columns through, so a blend can mix GBM (joblib feature-matrix predict) and
+torch (block-sequence predict) models transparently.
 """
 from __future__ import annotations
 
@@ -44,10 +58,11 @@ from src.training.train_baseline import KPX_GROUPS
 
 logger = logging.getLogger(__name__)
 
-# Runs this blend combines -- all three trained on the identical pruned
-# feature set + group2 wake features + identical 5-fold BlockTimeSeriesSplit,
-# per the task spec, so their OOF rows/folds line up exactly (verified in
-# main() before any weight search runs).
+# Default runs this blend combines -- the LightGBM/XGBoost/CatBoost pruned
+# blend, all trained on the identical pruned feature set + group2 wake features
+# + identical 5-fold BlockTimeSeriesSplit, so their OOF rows/folds line up
+# exactly (verified in main() before any weight search runs). Override on the
+# CLI with ``--runs name=run_id`` (e.g. the v14 gbm/lstm/transformer blend).
 DEFAULT_RUNS: dict[str, str] = {
     "lgbm": "20260722_103636_lgbm_tuned_pruned",
     "xgb": "20260722_105650_xgb_tuned_pruned",
@@ -58,7 +73,7 @@ BASELINE_MODEL_NAME = "lgbm"
 
 WEIGHT_STEP = 0.05
 # A group's nested-LOFO blend is only adopted over pure baseline if it beats
-# the baseline's own mean CV score AND does so in a majority of the 5 folds
+# the baseline's own mean CV score AND does so in a majority of the folds
 # (not just on average) -- guards against one lucky fold masking a blend that
 # is actually worse most of the time.
 MIN_FOLDS_IMPROVED = 3
@@ -142,6 +157,37 @@ def blend_score(df: pd.DataFrame, group: str, model_names: list[str], weights: t
     return competition_score(pred_df, actual_df, group_cols=[group])["score"]
 
 
+def per_fold_mean_score(
+    df: pd.DataFrame, group: str, model_names: list[str], weights: tuple[float, ...]
+) -> tuple[float, dict[int, float]]:
+    """Mean over folds of a **fixed** (not fitted) weight's per-fold held-out
+    ``competition_score``.
+
+    Because the weight is fixed, evaluating it fold-by-fold and averaging is an
+    honest, directly-comparable CV number -- exactly how each base model's own
+    ``score_mean`` is computed (mean of per-fold held-out scores). Used for the
+    v14 fixed-weight and single-track rows of the comparison table, so they sit
+    on the same footing as the nested-LOFO blend and each other.
+    """
+    folds = sorted(int(f) for f in df["fold"].unique())
+    per_fold = {k: blend_score(df[df["fold"] == k], group, model_names, weights) for k in folds}
+    return float(np.mean(list(per_fold.values()))), per_fold
+
+
+def weights_dict_to_tuple(model_names: list[str], weights: dict[str, float]) -> tuple[float, ...]:
+    """Convert a ``{name: weight}`` mapping into a tuple aligned to
+    ``model_names`` order (missing names default to 0.0). Raises if the weights
+    don't sum to ~1 or reference an unknown model name.
+    """
+    unknown = set(weights) - set(model_names)
+    if unknown:
+        raise ValueError(f"fixed weights reference unknown model(s): {sorted(unknown)} (known: {model_names})")
+    tup = tuple(float(weights.get(name, 0.0)) for name in model_names)
+    if abs(sum(tup) - 1.0) > 1e-6:
+        raise ValueError(f"fixed weights must sum to 1.0, got {sum(tup)} for {weights}")
+    return tup
+
+
 def best_weight(
     df: pd.DataFrame, group: str, model_names: list[str], grid: list[tuple[float, ...]]
 ) -> tuple[tuple[float, ...], float]:
@@ -184,11 +230,14 @@ def analyze_group(
     runs: dict[str, str],
     baseline_fold_scores: dict[int, float],
     baseline_mean_score: float,
+    baseline_model_name: str,
     step: float = WEIGHT_STEP,
     min_folds_improved: int = MIN_FOLDS_IMPROVED,
+    fixed_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Full per-group analysis: join OOF, nested LOFO search, production
-    weight fit, adopt/fallback decision vs the baseline model's own CV score.
+    """Full per-group analysis: join OOF, nested LOFO search, production weight
+    fit, adopt/fallback decision vs the baseline model's own CV score, plus an
+    honest comparison table (single-track means + optional fixed-weight blend).
     """
     model_names = list(runs.keys())
     df = load_joined_oof(runs, group)
@@ -196,9 +245,9 @@ def analyze_group(
 
     nested_rows = nested_lofo_search(df, group, model_names, grid)
     for r in nested_rows:
-        lgbm_score = baseline_fold_scores[r["held_out_fold"]]
-        r["baseline_eval_score_on_held_fold"] = lgbm_score
-        r["delta_vs_baseline"] = r["blend_eval_score_on_held_fold"] - lgbm_score
+        base_score = baseline_fold_scores[r["held_out_fold"]]
+        r["baseline_eval_score_on_held_fold"] = base_score
+        r["delta_vs_baseline"] = r["blend_eval_score_on_held_fold"] - base_score
 
     nested_mean = float(np.mean([r["blend_eval_score_on_held_fold"] for r in nested_rows]))
     n_improved = sum(1 for r in nested_rows if r["delta_vs_baseline"] > 0)
@@ -206,8 +255,21 @@ def analyze_group(
     prod_w, prod_fit_score = best_weight(df, group, model_names, grid)
 
     adopt_blend = (nested_mean > baseline_mean_score) and (n_improved >= min_folds_improved)
-    fallback_weight = {name: (1.0 if name == BASELINE_MODEL_NAME else 0.0) for name in model_names}
+    fallback_weight = {name: (1.0 if name == baseline_model_name else 0.0) for name in model_names}
     final_weight = {name: float(x) for name, x in zip(model_names, prod_w)} if adopt_blend else fallback_weight
+
+    # -- honest comparison table (same held-out-mean footing for every row) --
+    single_track = {}
+    for name in model_names:
+        w = tuple(1.0 if m == name else 0.0 for m in model_names)
+        mean_s, folds_s = per_fold_mean_score(df, group, model_names, w)
+        single_track[name] = {"mean_score": mean_s, "per_fold": folds_s}
+
+    fixed_block = None
+    if fixed_weights is not None:
+        fw_tuple = weights_dict_to_tuple(model_names, fixed_weights)
+        mean_s, folds_s = per_fold_mean_score(df, group, model_names, fw_tuple)
+        fixed_block = {"weights": dict(fixed_weights), "mean_score": mean_s, "per_fold": folds_s}
 
     return {
         "group": group,
@@ -215,24 +277,56 @@ def analyze_group(
         "weight_grid_step": step,
         "nested_lofo_rows": nested_rows,
         "nested_blend_mean_score": nested_mean,
+        "baseline_model_name": baseline_model_name,
         "baseline_mean_score": baseline_mean_score,
         "delta_vs_baseline_nested": nested_mean - baseline_mean_score,
-        "n_folds_improved_of_5": n_improved,
+        "n_folds_improved": n_improved,
+        "n_folds_total": len(nested_rows),
         "min_folds_improved_required": min_folds_improved,
         "production_weight_fit_on_all_folds": {name: float(x) for name, x in zip(model_names, prod_w)},
         "production_weight_fit_score_optimistic_not_for_decisions": float(prod_fit_score),
         "adopt_blend": adopt_blend,
         "final_weight": final_weight,
+        "single_track_cv": single_track,
+        "fixed_weight_cv": fixed_block,
     }
 
 
+def _predict_group_test(model: Any, test_df: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
+    """Predict one group's TEST rows with either a feature-matrix model
+    (GBM/LightGBM/XGBoost/CatBoost wrappers -- ``predict`` takes ``X`` columns)
+    or a sequence model (LSTM/Transformer -- ``predict`` takes a DataFrame that
+    also carries the forecast-block key + datetime so it can assemble
+    per-block sequences). Detected via the wrapper's ``block_col``/``dt_col``
+    attributes; returns predictions aligned to ``test_df`` row order.
+    """
+    block_col = getattr(model, "block_col", None)
+    dt_col = getattr(model, "dt_col", None)
+    if block_col is not None and dt_col is not None:
+        needed = list(feature_cols)
+        for c in (block_col, dt_col):
+            if c not in needed:
+                needed.append(c)
+        missing = [c for c in needed if c not in test_df.columns]
+        if missing:
+            raise ValueError(
+                f"sequence model needs columns absent from the test parquet: {missing[:10]}"
+            )
+        return model.predict(test_df[needed])
+    return model.predict(test_df[feature_cols])
+
+
 def generate_blend_submission(
-    run_id: str, runs: dict[str, str], final_weights: dict[str, dict[str, float]]
+    run_id: str, runs: dict[str, str], final_weights: dict[str, dict[str, float]], label: str = ""
 ) -> pd.DataFrame:
-    """Apply each group's final per-model weights to the 3 runs' TEST
-    predictions (each model's own ``model_<group>.joblib`` + that run's own
-    ``feature_cols_per_group`` from config.yaml), sum, clip to capacity, and
-    assemble/validate a submission exactly like ``src.inference.predict``.
+    """Apply each group's per-model weights to the runs' TEST predictions (each
+    model's own ``model_<group>.joblib`` + that run's own ``feature_cols_per_group``
+    from config.yaml), sum, clip to capacity, and assemble/validate a submission
+    exactly like ``src.inference.predict``.
+
+    ``label`` suffixes the output filename (``submission_<run_id>_<label>.csv``)
+    so multiple candidate blends (e.g. nested-LOFO vs a fixed v14 weight) from
+    one run don't overwrite each other.
     """
     sample = load_sample_submission()
     submission = sample[["forecast_id", "forecast_kst_dtm"]].copy()
@@ -246,22 +340,23 @@ def generate_blend_submission(
         w = final_weights[group]
         blended = None
         capacity_kwh = None
+        last_test_df = None
         for name, rid in runs.items():
             weight = w.get(name, 0.0)
             if weight == 0.0:
                 continue
-            model_path = EXPERIMENTS_DIR / rid / f"model_{group}.joblib"
-            model = joblib.load(model_path)
+            model = joblib.load(EXPERIMENTS_DIR / rid / f"model_{group}.joblib")
             capacity_kwh = model.capacity_kwh
             feature_cols = run_configs[name]["feature_cols_per_group"][group]
             test_df = pd.read_parquet(DATA_PROCESSED_DIR / f"features_{group}_test.parquet")
-            preds = model.predict(test_df[feature_cols])
+            last_test_df = test_df
+            preds = _predict_group_test(model, test_df, feature_cols)
             blended = preds * weight if blended is None else blended + preds * weight
         if blended is None:
             raise ValueError(f"{group}: final weight has no nonzero component -- nothing to predict with.")
         blended = np.clip(blended, 0.0, capacity_kwh * 1.01)
 
-        pred_df = pd.DataFrame({"forecast_kst_dtm": test_df["forecast_kst_dtm"].to_numpy(), group: blended})
+        pred_df = pd.DataFrame({"forecast_kst_dtm": last_test_df["forecast_kst_dtm"].to_numpy(), group: blended})
         before_len = len(submission)
         submission = submission.merge(pred_df, on="forecast_kst_dtm", how="left")
         if len(submission) != before_len:
@@ -278,25 +373,70 @@ def generate_blend_submission(
     assert (submission["forecast_id"].to_numpy() == sample["forecast_id"].to_numpy()).all()
     assert (submission["forecast_kst_dtm"].to_numpy() == sample["forecast_kst_dtm"].to_numpy()).all()
 
-    out_path = SUBMISSIONS_DIR / f"submission_{run_id}.csv"
+    suffix = f"_{label}" if label else ""
+    out_path = SUBMISSIONS_DIR / f"submission_{run_id}{suffix}.csv"
     submission.to_csv(out_path, index=False, encoding="utf-8-sig")
     logger.info("Wrote blended submission: %s (%d rows)", out_path, len(submission))
     return submission
 
 
+def _parse_kv(items: list[str] | None, cast=str) -> dict[str, Any]:
+    """Parse repeated ``name=value`` CLI args into a dict (order preserved)."""
+    out: dict[str, Any] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"expected name=value, got {item!r}")
+        name, value = item.split("=", 1)
+        out[name.strip()] = cast(value.strip())
+    return out
+
+
 def main() -> str:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Per-group nested-LOFO ensemble weight search.")
+    parser.add_argument(
+        "--runs", action="append", metavar="name=run_id",
+        help="Repeatable: a model name and its experiments/<run_id>. Defaults to the "
+             "lgbm/xgb/cat pruned blend if omitted.",
+    )
+    parser.add_argument(
+        "--baseline-name", default=None,
+        help="Which --runs model is the standalone bar a blend must clear (default: first run, "
+             "or BASELINE_MODEL_NAME for the built-in default runs).",
+    )
+    parser.add_argument(
+        "--baseline-run-id", default=None,
+        help="Run id whose metrics.json supplies the baseline per-fold/mean CV scores "
+             "(default: the baseline model's own run).",
+    )
+    parser.add_argument(
+        "--fixed-weights", action="append", metavar="name=weight",
+        help="Repeatable: a fixed reference blend weight per model (e.g. the v14 "
+             "lstm=0.35/transformer=0.35/gbm=0.30). Added to the comparison table and, "
+             "if it sums to 1, written as an additional candidate submission.",
+    )
+    parser.add_argument("--run-suffix", default="ensemble_lgbm_xgb_cat",
+                        help="Suffix for the generated experiments/<timestamp>_<suffix> run dir.")
     parser.add_argument("--step", type=float, default=WEIGHT_STEP)
     parser.add_argument("--min-folds-improved", type=int, default=MIN_FOLDS_IMPROVED)
-    parser.add_argument("--force-submission", action="store_true", help="Write a blended submission even if no group adopts the blend (writes the pure-baseline-equivalent blend).")
+    parser.add_argument("--force-submission", action="store_true",
+                        help="Write the nested-LOFO blend submission even if no group adopts a blend "
+                             "(writes the pure-baseline-equivalent blend).")
     args = parser.parse_args()
 
-    runs = DEFAULT_RUNS
-    with open(EXPERIMENTS_DIR / runs[BASELINE_MODEL_NAME] / "metrics.json", "r", encoding="utf-8") as f:
+    runs = _parse_kv(args.runs) if args.runs else dict(DEFAULT_RUNS)
+    model_names = list(runs.keys())
+    baseline_name = args.baseline_name or (BASELINE_MODEL_NAME if BASELINE_MODEL_NAME in runs else model_names[0])
+    if baseline_name not in runs:
+        raise ValueError(f"--baseline-name {baseline_name!r} is not among --runs {model_names}")
+    baseline_run_id = args.baseline_run_id or runs[baseline_name]
+
+    fixed_weights = _parse_kv(args.fixed_weights, cast=float) if args.fixed_weights else None
+
+    with open(EXPERIMENTS_DIR / baseline_run_id / "metrics.json", "r", encoding="utf-8") as f:
         baseline_metrics = json.load(f)
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_ensemble_lgbm_xgb_cat"
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{args.run_suffix}"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -305,34 +445,67 @@ def main() -> str:
         baseline_fold_scores = {fm["fold"]: fm["score"] for fm in baseline_metrics[group]["fold_metrics"]}
         baseline_mean = baseline_metrics[group]["agg_metrics"]["score_mean"]
         result = analyze_group(
-            group, runs, baseline_fold_scores, baseline_mean, step=args.step, min_folds_improved=args.min_folds_improved
+            group, runs, baseline_fold_scores, baseline_mean, baseline_name,
+            step=args.step, min_folds_improved=args.min_folds_improved, fixed_weights=fixed_weights,
         )
         group_results[group] = result
-        print(f"\n=== {group}: nested LOFO blend mean={result['nested_blend_mean_score']:.4f} "
-              f"vs baseline({BASELINE_MODEL_NAME})={baseline_mean:.4f} "
-              f"(delta={result['delta_vs_baseline_nested']:+.4f}, "
-              f"improved {result['n_folds_improved_of_5']}/5 folds) -> "
-              f"{'ADOPT BLEND' if result['adopt_blend'] else 'FALL BACK TO BASELINE'} "
-              f"final_weight={result['final_weight']}")
 
-    overall_baseline = float(np.mean([baseline_metrics[g]["agg_metrics"]["score_mean"] for g in KPX_GROUPS]))
-    overall_adopted = float(np.mean([group_results[g]["nested_blend_mean_score"] if group_results[g]["adopt_blend"]
-                                      else baseline_metrics[g]["agg_metrics"]["score_mean"] for g in KPX_GROUPS]))
+    # -- honest comparison table -----------------------------------------
+    def overall_of(selector) -> float:
+        return float(np.mean([selector(group_results[g]) for g in KPX_GROUPS]))
+
+    print("\n" + "=" * 92)
+    print(f"HONEST COMPARISON (held-out CV competition_score; runs={runs}, baseline={baseline_name})")
+    print("=" * 92)
+    header = f"{'group':<14}" + "".join(f"{name+'-alone':>16}" for name in model_names)
+    if fixed_weights is not None:
+        header += f"{'v14-fixed':>14}"
+    header += f"{'nestedLOFO':>13}{'adopt':>8}"
+    print(header)
+    for g in KPX_GROUPS:
+        r = group_results[g]
+        line = f"{g:<14}"
+        for name in model_names:
+            line += f"{r['single_track_cv'][name]['mean_score']:>16.4f}"
+        if fixed_weights is not None:
+            line += f"{r['fixed_weight_cv']['mean_score']:>14.4f}"
+        line += f"{r['nested_blend_mean_score']:>13.4f}{('Y' if r['adopt_blend'] else 'n'):>8}"
+        print(line)
+    # overall row
+    line = f"{'OVERALL':<14}"
+    for name in model_names:
+        line += f"{overall_of(lambda r, n=name: r['single_track_cv'][n]['mean_score']):>16.4f}"
+    if fixed_weights is not None:
+        line += f"{overall_of(lambda r: r['fixed_weight_cv']['mean_score']):>14.4f}"
+    line += f"{overall_of(lambda r: r['nested_blend_mean_score']):>13.4f}"
+    print(line)
+    for g in KPX_GROUPS:
+        r = group_results[g]
+        print(f"  {g}: nested final_weight={r['final_weight']} "
+              f"(improved {r['n_folds_improved']}/{r['n_folds_total']} folds, "
+              f"delta_vs_{baseline_name}={r['delta_vs_baseline_nested']:+.4f})")
+
+    overall_baseline = overall_of(lambda r: r["baseline_mean_score"])
+    overall_nested_adopted = float(np.mean([
+        group_results[g]["nested_blend_mean_score"] if group_results[g]["adopt_blend"]
+        else group_results[g]["baseline_mean_score"] for g in KPX_GROUPS
+    ]))
     any_adopted = any(group_results[g]["adopt_blend"] for g in KPX_GROUPS)
-
-    print(f"\n=== OVERALL: baseline({BASELINE_MODEL_NAME})={overall_baseline:.4f} "
-          f"adopted-per-group(nested, honest)={overall_adopted:.4f} "
-          f"(delta={overall_adopted - overall_baseline:+.4f}) ===")
+    print(f"\nOVERALL baseline({baseline_name})={overall_baseline:.4f}  "
+          f"adopted-per-group(honest nested)={overall_nested_adopted:.4f}  "
+          f"delta={overall_nested_adopted - overall_baseline:+.4f}")
 
     config = {
         "run_id": run_id,
         "method": "ensembler: per-group nested leave-one-fold-out (LOFO) weighted-average blend "
-                  "over already-trained LightGBM/XGBoost/CatBoost OOF predictions",
+                  "over already-trained model OOF predictions",
         "base_runs": runs,
-        "baseline_model_for_decision": BASELINE_MODEL_NAME,
+        "baseline_model_for_decision": baseline_name,
+        "baseline_run_id_for_metrics": baseline_run_id,
         "weight_grid_step": args.step,
         "min_folds_improved_required": args.min_folds_improved,
-        "final_weight_per_group": {g: group_results[g]["final_weight"] for g in KPX_GROUPS},
+        "fixed_reference_weights": fixed_weights,
+        "final_weight_per_group_nested": {g: group_results[g]["final_weight"] for g in KPX_GROUPS},
         "adopt_blend_per_group": {g: group_results[g]["adopt_blend"] for g in KPX_GROUPS},
         "any_group_adopted": any_adopted,
     }
@@ -343,20 +516,29 @@ def main() -> str:
         "per_group": group_results,
         "overall": {
             "baseline_score": overall_baseline,
-            "adopted_per_group_nested_score": overall_adopted,
-            "delta": overall_adopted - overall_baseline,
+            "single_track": {n: overall_of(lambda r, nn=n: r["single_track_cv"][nn]["mean_score"]) for n in model_names},
+            "fixed_weight_score": (overall_of(lambda r: r["fixed_weight_cv"]["mean_score"]) if fixed_weights else None),
+            "nested_blend_score": overall_of(lambda r: r["nested_blend_mean_score"]),
+            "adopted_per_group_nested_score": overall_nested_adopted,
         },
     }
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics_out, f, indent=2, default=str)
 
+    # -- candidate submissions -------------------------------------------
     if any_adopted or args.force_submission:
-        generate_blend_submission(run_id, runs, {g: group_results[g]["final_weight"] for g in KPX_GROUPS})
+        generate_blend_submission(
+            run_id, runs, {g: group_results[g]["final_weight"] for g in KPX_GROUPS}, label="nested_lofo"
+        )
     else:
         print(
-            "\nNo group's nested-LOFO blend robustly beat its baseline -> recommendation is "
-            "to keep the baseline standalone submission as final; no new blended submission "
-            "written (pass --force-submission to override)."
+            "\nNo group's nested-LOFO blend robustly beat its baseline -> the honest nested "
+            "recommendation is the baseline standalone; no nested blended submission written "
+            "(pass --force-submission to also emit the pure-baseline-equivalent blend)."
+        )
+    if fixed_weights is not None:
+        generate_blend_submission(
+            run_id, runs, {g: dict(fixed_weights) for g in KPX_GROUPS}, label="v14_fixed"
         )
 
     print(f"\nRun dir: {run_dir}")
