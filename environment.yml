@@ -4,6 +4,11 @@ channels:
 dependencies:
   - python=3.11
   - pandas
+  # Pin numpy's BLAS to OpenBLAS, not MKL: the pip-installed CUDA PyTorch below
+  # ships its own Intel OpenMP/MKL DLLs, and mixing them with conda's MKL numpy
+  # made numpy's BLAS matmul crash on Windows (delay-load failure 0xc06d007f).
+  # OpenBLAS numpy coexists cleanly with pip torch.
+  - libblas=*=*openblas
   - numpy
   - scikit-learn
   - lightgbm
@@ -18,6 +23,16 @@ dependencies:
   - pyyaml
   - tqdm
   - pytest
+  - jupyterlab
   - pip
   - pip:
-      - jupyterlab
+      # PyTorch (sequence models: LSTM/Transformer, v14 reproduction Phase C/D).
+      # CUDA 12.1 build -- works on this machine's GTX 1080 (Pascal, CC 6.1)
+      # under its CUDA 12.6 driver; falls back to CPU automatically where no
+      # GPU is present. The --index-url below applies to this whole pip block,
+      # so keep only torch here (jupyterlab is a conda dep above) -- otherwise a
+      # fresh `conda env create` would look for jupyterlab on the torch index
+      # and fail. If this cu121 wheel is unstable on another machine, install
+      # torch separately: pip install torch --index-url .../whl/cu121
+      - --index-url https://download.pytorch.org/whl/cu121
+      - torch==2.5.1
