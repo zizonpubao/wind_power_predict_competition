@@ -146,8 +146,40 @@ from src.features.weather_features import (
     wind_speed_direction,
 )
 from src.features.wind_shear import DEFAULT_SHEAR_EXPONENT, estimate_shear_exponent, power_law_extrapolate
+from src.features.physics_features import (
+    air_density,
+    apply_power_curve,
+    density_ratio,
+    grid_speed_dispersion,
+    sector_speed_features,
+    shear_exponent,
+    veer_cos,
+    wind_power_density,
+)
+from src.features.scada_power_curve import load_scada_power_curves
 
 logger = logging.getLogger(__name__)
+
+# VESTAS V126 (group_1/2) vs UNISON U136 (group_3) -- which fitted SCADA
+# empirical power curve to apply to a group's forecast hub-height wind speed.
+_KPX_GROUP_SCADA_SOURCE = {
+    "kpx_group_1": "vestas",
+    "kpx_group_2": "vestas",
+    "kpx_group_3": "unison",
+}
+
+# Number of directional sectors for the sector x speed interaction batch.
+_N_DIR_SECTORS = 8
+
+# Lazily-loaded, cached fitted SCADA power curves (see scada_power_curve.py).
+_SCADA_CURVES_CACHE: dict | None = None
+
+
+def _get_scada_curves() -> dict:
+    global _SCADA_CURVES_CACHE
+    if _SCADA_CURVES_CACHE is None:
+        _SCADA_CURVES_CACHE = load_scada_power_curves()
+    return _SCADA_CURVES_CACHE
 
 _BLOCK_COLS = ["forecast_kst_dtm", "data_available_kst_dtm"]
 
@@ -174,6 +206,10 @@ _GFS_RENAME = {
     "planetaryBoundaryLayer_0_v": "gfs_pbl_v",
     "surface_0_dswrf": "gfs_dswrf",
     "atmosphere_0_tcc": "gfs_tcc",
+    # Added for the air-density physics batch (surface pressure Pa, 2m temp K)
+    # -- GFS's own sp/t2m so a GFS-side density correction is possible too.
+    "surface_0_sp": "gfs_sp",
+    "heightAboveGround_2_2t": "gfs_t2m",
 }
 
 # (u_col, v_col, feature-name prefix) tuples fed to wind_speed_direction /
@@ -187,7 +223,7 @@ _GFS_LEVELS = [
 ]
 
 _LDAPS_SCALAR_COLS = ["ldaps_t2m", "ldaps_sp", "ldaps_blh"]
-_GFS_SCALAR_COLS = ["gfs_dswrf", "gfs_tcc"]
+_GFS_SCALAR_COLS = ["gfs_dswrf", "gfs_tcc", "gfs_sp", "gfs_t2m"]
 
 # The subset of derived columns lag_rolling_features is applied to -- see
 # module docstring for why this subset and not every column.
@@ -277,6 +313,69 @@ def _build_source_features(
     for u_col, v_col, prefix in levels:
         wsd = wind_speed_direction(df, u_col, v_col, prefix=prefix)
         merged = merged.merge(wsd, on=_BLOCK_COLS, how="outer")
+
+    # Batch 4: across-grid spatial dispersion of wind speed (front / gradient
+    # signal an IDW mean throws away). Only for the primary vector level(s):
+    # LDAPS 10m, and GFS 100m (nearest to hub) + GFS 10m.
+    dispersion_levels = {
+        "ldaps": [("ldaps_10m_u", "ldaps_10m_v", "ldaps_10m")],
+        "gfs": [
+            ("gfs_10m_u", "gfs_10m_v", "gfs_10m"),
+            ("gfs_100m_u", "gfs_100m_v", "gfs_100m"),
+        ],
+    }[source]
+    for u_col, v_col, prefix in dispersion_levels:
+        disp = grid_speed_dispersion(df, u_col, v_col, prefix=prefix)
+        merged = merged.merge(disp, on=_BLOCK_COLS, how="outer")
+    return merged
+
+
+def _add_physics_features(merged: pd.DataFrame, kpx_group: str) -> pd.DataFrame:
+    """Add the first-principles physics batches (air density / density-corrected
+    power, shear-exponent & veer stability proxies, directional-sector x speed,
+    and the SCADA empirical power curve applied to forecast hub speed) to the
+    fully-merged LDAPS+GFS frame. Mutates and returns ``merged``.
+
+    All inputs are forecast-derived (or the frozen SCADA curve) -- see
+    physics_features.py / scada_power_curve.py for the leakage argument.
+    """
+    # --- Batch 1: air density + density-corrected power-in-wind ---
+    rho_ldaps = air_density(merged["ldaps_sp_idw"], merged["ldaps_t2m_idw"])
+    merged["ldaps_air_density"] = rho_ldaps
+    merged["ldaps_density_ratio"] = density_ratio(rho_ldaps)
+    rho_gfs = air_density(merged["gfs_sp_idw"], merged["gfs_t2m_idw"])
+    merged["gfs_air_density"] = rho_gfs
+    # rho * v^3 (power flux) for the physically most-relevant speeds:
+    merged["ldaps_rho_v3_10m"] = wind_power_density(rho_ldaps, merged["ldaps_10m_speed_idw"])
+    merged["ldaps_rho_v3_hub"] = wind_power_density(rho_ldaps, merged["ldaps_ws_hub_fixed"])
+    merged["gfs_rho_v3_100m"] = wind_power_density(rho_gfs, merged["gfs_100m_speed_idw"])
+    merged["gfs_rho_v3_hub"] = wind_power_density(rho_gfs, merged["gfs_ws_hub_est"])
+
+    # --- Batch 2: shear exponent (stability proxy) + veer ---
+    merged["gfs_shear_alpha_10_100"] = shear_exponent(
+        merged["gfs_10m_speed_idw"], 10.0, merged["gfs_100m_speed_idw"], 100.0
+    )
+    merged["gfs_shear_alpha_80_100"] = shear_exponent(
+        merged["gfs_80m_speed_idw"], 80.0, merged["gfs_100m_speed_idw"], 100.0
+    )
+    merged["gfs_veer_cos_10_100"] = veer_cos(
+        merged["gfs_10m_u_idw"], merged["gfs_10m_v_idw"],
+        merged["gfs_100m_u_idw"], merged["gfs_100m_v_idw"],
+    )
+
+    # --- Batch 3: directional-sector x speed (LDAPS 10m, terrain channelling) ---
+    sector_df = sector_speed_features(
+        merged["ldaps_10m_dir_deg"], merged["ldaps_10m_speed_idw"],
+        n_sectors=_N_DIR_SECTORS, prefix="ldaps_10m",
+    )
+    for col in sector_df.columns:
+        merged[col] = sector_df[col].to_numpy()
+
+    # --- Batch 5: SCADA empirical power curve applied to forecast hub speed ---
+    curve = _get_scada_curves()[_KPX_GROUP_SCADA_SOURCE[kpx_group]]
+    merged["scada_pc_ldaps_hub"] = apply_power_curve(curve, merged["ldaps_ws_hub_fixed"])
+    merged["scada_pc_gfs_hub"] = apply_power_curve(curve, merged["gfs_ws_hub_est"])
+
     return merged
 
 
@@ -311,6 +410,11 @@ def _assemble_feature_table(
     gfs_features = _build_source_features(gfs_renamed, _GFS_LEVELS, _GFS_SCALAR_COLS, kpx_group, source="gfs")
 
     merged = ldaps_features.merge(gfs_features, on=_BLOCK_COLS, how="outer")
+
+    # First-principles physics batches (air density, shear/veer stability,
+    # directional-sector x speed, SCADA empirical power curve) -- computed on
+    # the merged frame where both sources' IDW speed/scalar columns coexist.
+    merged = _add_physics_features(merged, kpx_group)
 
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
