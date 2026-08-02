@@ -1,0 +1,24 @@
+# Lightweight pip/venv alternative to environment.yml (conda).
+# Anaconda's full install is multi-GB; a venv with just these is ~<1GB and
+# runs everything except the neural nets.
+#
+#   py -3.11 -m venv .venv     # (3.11 preferred; 3.13 also works)
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#
+# PyTorch is intentionally NOT here -- it's the biggest install (~2.5GB with
+# CUDA) and only the LSTM/Transformer need it. Add it separately when needed:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+pandas
+numpy
+scikit-learn
+lightgbm
+xgboost
+catboost
+optuna
+pyarrow
+pyyaml
+tqdm
+pytest
+# optional (plots / notebooks): matplotlib seaborn plotly openpyxl jupyterlab
