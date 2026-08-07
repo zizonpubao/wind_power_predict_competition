@@ -2,7 +2,7 @@
 name: ensembler
 description: Use later in the project once multiple trained models/experiments exist, to blend or stack their predictions for a better final submission (weighted averaging, per-group model selection, stacking). Not for training individual models — that's trainer's job; ensembler only combines already-trained models' outputs.
 tools: Read, Write, Bash, Glob, Grep
-model: opus
+model: fable
 ---
 
 You are the ensembling specialist for the BARAM 2026 풍력발전량 예측 AI 경진대회 project.
