@@ -30,7 +30,25 @@
         "ecmwf_ldaps_ws_ratio",
         "ecmwf_minus_gfs_ws100"
       ],
-      "reason": "Experiment queue #12 retry: run 20260807_142800_gbm_quantile_pruned added these 11 ECMWF features to ALL 3 groups and found g1 covered-window OOF +0.0038 but g2 -0.0229 (net -0.0020) -- g2 got worse, not g1. ecmwf_ws100-target corr (0.773) is stronger than ldaps (0.744), so the hypothesis is that g2 is being polluted by something group-specific (its wake-effect features already encode g1's upstream wind, possibly redundant/conflicting with ecmwf's own signal) while g1 itself benefits. This override adds ECMWF features to g1 ONLY, leaving g2/g3 untouched, to test that hypothesis in isolation. THIS IS A TEMPORARY EXPERIMENTAL CHANGE -- reverted after CV comparison unless g1 shows a clear net gain (see reports/experiment_queue.md #12 for the outcome)."
+      "reason": "Experiment queue #12 retry: run 20260807_142800_gbm_quantile_pruned added these 11 ECMWF features to ALL 3 groups and found g1 covered-window OOF +0.0038 but g2 -0.0229 (net -0.0020) -- g2 got worse, not g1. ecmwf_ws100-target corr (0.773) is stronger than ldaps (0.744), so the hypothesis is that g2 is being polluted by something group-specific (its wake-effect features already encode g1's upstream wind, possibly redundant/conflicting with ecmwf's own signal) while g1 itself benefits. This override adds ECMWF features to g1 ONLY, leaving g2/g3 untouched, to test that hypothesis in isolation. THIS IS A TEMPORARY EXPERIMENTAL CHANGE -- reverted after CV comparison unless g1 shows a clear net gain (see reports/experiment_queue.md #12 for the outcome). RESULT: g1 showed a clear net gain (run 20260807_191416_gbm_quantile_pruned, CV overall 0.6042 vs baseline 0.6038, g1 0.6104), leaderboard-verified at 0.6302 (new best) -- this override is now PERMANENT, not temporary."
+    },
+    {
+      "date": "2026-08-07",
+      "group": "kpx_group_3",
+      "added_features": [
+        "ecmwf_ws100",
+        "ecmwf_ws10",
+        "ecmwf_ws100_cubed",
+        "ecmwf_dir_sin",
+        "ecmwf_dir_cos",
+        "ecmwf_t2m",
+        "ecmwf_sp",
+        "ecmwf_minus_ldaps_ws10",
+        "ecmwf_minus_ldaps_hub",
+        "ecmwf_ldaps_ws_ratio",
+        "ecmwf_minus_gfs_ws100"
+      ],
+      "reason": "Experiment queue #E: the all-3-groups ECMWF run (20260807_142800) found g3's covered-window delta near-neutral (-0.0006), unlike g2's clear -0.0229 harm. Testing whether g3 alone (g1 kept as-is, g2 still excluded) shows a clear gain worth adopting permanently, mirroring the g1 precedent. TEMPORARY/EXPERIMENTAL pending CV comparison against the 20260807_191416_gbm_quantile_pruned g3 baseline (0.5684) -- see reports/experiment_queue.md #E for the outcome. Revert (drop back to g1-only ECMWF) unless g3 shows a clear, unambiguous improvement. RESULT (REJECTED): run 20260807_233511_gbm_quantile_pruned gave g3 CV 0.5680 (-0.0004 vs baseline) and covered-window OOF 0.5897 (-0.0006 vs baseline 0.5903) -- confirms the original all-groups finding that g3 is neutral-to-slightly-negative for ECMWF, not a gain. Reverted; g3 stays ECMWF-free (canonical is g1-only ECMWF, matching the 08-07 probe_ecmwfg1 leaderboard result). This override entry is kept for the record only -- the features below are NOT in kpx_group_3's active selected_features list."
     }
   ],
   "groups": {

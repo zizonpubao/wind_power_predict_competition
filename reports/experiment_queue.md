@@ -39,9 +39,11 @@
 | 7 | 결정최적화 n_grid 201 | 후보 해상도 1%→0.5%가 문턱 근처를 더 잘 잡나 | 결정단계만 재실행 | 대기 |
 | 8 | GBM 시드 배깅 (3시드) | 분위수 추정 분산 축소 | seed 3개 재학습 후 분위수 평균(CPU) | 대기 |
 | 9 | 풍속 quantile-mapping 편향보정 | LDAPS 풍속의 분포 편향을 SCADA 실측 풍속으로 교정(학습기간 fit, test 적용 가능 함수) | 매핑 fit → 피처 추가 → 재학습 | 대기 |
-| 10 | ICON 예보 보조 (2023+) | 제4 NWP 보조 신호 | Open-Meteo, ECMWF 결과 좋을 때만 | 대기 |
+| 10 | ICON g1-한정 (제4 NWP) | ECMWF g1 수확과 동일 패턴이 제4 NWP에도 통하나 | `src/data/fetch_icon.py`(DWD icon_global, Open-Meteo Previous Runs API, offset_days=2) 백필 → g1 피처 11개 추가 → GBM 재학습 | **기각** (`20260807_233518` 계열 run `20260807_232548_gbm_quantile_pruned`). 리키지 검증: `tests/test_icon.py`(20 테스트 통과, ECMWF와 동일 offset=2 산술 재사용, 보수적으로 ECMWF의 7h34m 지연을 그대로 차용 — DWD 실제 배포시각은 별도 확인 못 함). 백필 16,824행, 실제 커버리지는 2024-02-17+(기대했던 2022-11-24+는 offset 미적용 원본 아카이브 한정이며 리키지-세이프 API로는 확인 안 됨). CV: g1 0.6081 vs 기준 0.6104 (**-0.0023**), 커버구간 OOF 0.6303 vs 0.6370 (**-0.0067**) — ECMWF와 반대로 g1을 악화시킴. g2/g3 불변 확인(byte-identical). **selected_features.json 원복 완료(groups 섹션 canonical과 byte-identical), 프로브 미생성** |
 | 12 | ECMWF g1 한정 재시도 | ECMWF 원신호는 target 상관 0.773으로 LDAPS(0.744)보다 강한데 g2가 통합을 망침(-0.0229) — g1만(+0.0038) 쓰면 순증인가 | 그룹별 선택 포함으로 재학습(CPU) | 생성완료 (`submission_20260807_probe_ecmwfg1_halfrecal.csv`). `configs/selected_features.json`에 g1만 ECMWF 11개 피처 영구 반영(manual_overrides 기록, 2026-08-07). run `20260807_191416_gbm_quantile_pruned`: CV overall 0.6042 vs 기준 0.6038 (+0.0004), g1 전체 CV 0.6104(+0.0011)/커버구간(2024-04+) OOF 0.6411 vs 기준 0.6373 (**+0.0038, 이전 전체그룹 실험과 정확히 일치**) — g2/g3 예측값이 기준과 완전히 동일함을 직접 확인(byte-identical, 버그 없음). 가설 확인: g1 단독 적용 시 g2 오염 없이 순증 |
 | 11 | torch 재설치 + 신경망 재통합 | 신경망 트랙 복구 (현재 블렌드는 기존 CSV 산술로만 유지 가능) | ~2.5GB 설치, 필요 시점에 | 보류 |
+| 13 | 재보정 배수 재적합 (g1 GBM 교체 반영) | 새 g1 GBM(191416)으로 블렌드 OOF가 바뀌었으니 half 배수(1.06/1.03/1.0575)가 여전히 최적인가 | 새 블렌드(0.30×gbm_191416+0.35×lstm+0.35×transformer) OOF로 `fit_group_factor` 그리드([0.85,1.12]) 재적합 | **완료, 무승부**: 재적합 full-strength 배수 = g1 1.12(그리드 상한 포화)/g2 1.06/g3 1.115 — 기존과 **소수점까지 완전 동일**(half 적용해도 1.06/1.03/1.0575 그대로). g1이 두 번 다 그리드 상한(1.12)에서 포화되는 구조적 한계이지 신호 변화가 아님. 프로브 불필요(생성 안 함) |
+| 14 | ECMWF g3 추가 | g3 커버구간이 전그룹 실험에서 -0.0006(중립)이었음 — g3 단독으로도 그런가 | g1 유지, g3에만 ECMWF 11피처 추가(g2 제외) 재학습 | **기각** (`20260807_233511_gbm_quantile_pruned`). g1 byte-identical(0.6104, 격리 확인) / g3 CV 0.5680 vs 기준 0.5684(**-0.0004**), 커버구간 OOF 0.5897 vs 0.5903(**-0.0006**) — 원 전그룹 실험의 g3 중립~소폭악화 결론과 정확히 일치. selected_features.json 원복 완료(canonical과 byte-identical), 프로브 미생성 |
 
 ## 결과 장부
 

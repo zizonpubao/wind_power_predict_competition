@@ -264,6 +264,80 @@ def _add_ecmwf_features(merged: pd.DataFrame, ecmwf_df: pd.DataFrame | None) -> 
     merged["ecmwf_minus_gfs_ws100"] = ws100 - merged["gfs_100m_speed_idw"]
     return merged
 
+# --- ICON global (fourth, independent NWP source) -----------------------------
+# Backfilled by ``src.data.fetch_icon`` from the Open-Meteo Previous Runs API,
+# same ``previous_day2`` leakage-safe offset convention as ECMWF (see that
+# module's docstring for the arithmetic, re-verified in tests/test_icon.py).
+# Coverage starts ~2024-02-17 at this coordinate; earlier train rows keep NaN
+# in every icon_* column on purpose (LightGBM handles missing natively).
+ICON_PARQUET = DATA_INTERIM_DIR / "icon.parquet"
+
+# Model-input columns _add_icon_features produces (referenced by
+# configs/selected_features.json's manual_overrides -- keep names in sync).
+ICON_FEATURE_COLS = [
+    "icon_ws100",
+    "icon_ws10",
+    "icon_ws100_cubed",
+    "icon_dir_sin",
+    "icon_dir_cos",
+    "icon_t2m",
+    "icon_sp",
+    "icon_minus_ldaps_ws10",
+    "icon_minus_ldaps_hub",
+    "icon_ldaps_ws_ratio",
+    "icon_minus_gfs_ws100",
+]
+
+
+def load_icon() -> pd.DataFrame | None:
+    """Load the backfilled ICON parquet, or None (with a warning) if the
+    backfill has not been run on this machine yet.
+    """
+    if not ICON_PARQUET.exists():
+        logger.warning(
+            "%s not found -- run `python -m src.data.fetch_icon` first. "
+            "ICON feature columns will be all-NaN.",
+            ICON_PARQUET,
+        )
+        return None
+    return pd.read_parquet(ICON_PARQUET)
+
+
+def _add_icon_features(merged: pd.DataFrame, icon_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Left-join ICON raw fields on forecast_kst_dtm and derive the
+    ICON_FEATURE_COLS -- identical shape/derivation to ``_add_ecmwf_features``,
+    a fourth independent NWP source with its own cross-model disagreement
+    features vs LDAPS/GFS. Rows outside the backfill window stay NaN. Row
+    count is asserted unchanged (m:1 join).
+    """
+    before_len = len(merged)
+    if icon_df is not None:
+        merged = merged.merge(icon_df, on="forecast_kst_dtm", how="left")
+        if len(merged) != before_len:
+            raise ValueError(
+                f"ICON join changed row count ({before_len} -> {len(merged)}); "
+                "icon.parquet likely has duplicate forecast_kst_dtm values."
+            )
+    else:
+        for col in ("icon_wind_speed_100m", "icon_wind_direction_100m",
+                    "icon_wind_speed_10m", "icon_temperature_2m", "icon_surface_pressure"):
+            merged[col] = np.nan
+
+    ws100 = merged.pop("icon_wind_speed_100m")
+    wd100 = merged.pop("icon_wind_direction_100m")
+    merged["icon_ws100"] = ws100
+    merged["icon_ws10"] = merged.pop("icon_wind_speed_10m")
+    merged["icon_ws100_cubed"] = ws100.clip(lower=0.0) ** 3
+    merged["icon_dir_sin"] = np.sin(np.deg2rad(wd100))
+    merged["icon_dir_cos"] = np.cos(np.deg2rad(wd100))
+    merged["icon_t2m"] = merged.pop("icon_temperature_2m")
+    merged["icon_sp"] = merged.pop("icon_surface_pressure")
+    merged["icon_minus_ldaps_ws10"] = merged["icon_ws10"] - merged["ldaps_10m_speed_idw"]
+    merged["icon_minus_ldaps_hub"] = ws100 - merged["ldaps_ws_hub_fixed"]
+    merged["icon_ldaps_ws_ratio"] = ws100 / merged["ldaps_ws_hub_fixed"].clip(lower=0.5)
+    merged["icon_minus_gfs_ws100"] = ws100 - merged["gfs_100m_speed_idw"]
+    return merged
+
 KPX_GROUPS = ("kpx_group_1", "kpx_group_2", "kpx_group_3")
 SPLITS = ("train", "test")
 
@@ -461,6 +535,7 @@ def _add_physics_features(merged: pd.DataFrame, kpx_group: str) -> pd.DataFrame:
 
 
 _ECMWF_FROM_DISK = "__load_from_disk__"
+_ICON_FROM_DISK = "__load_from_disk__"
 
 
 def _assemble_feature_table(
@@ -469,6 +544,7 @@ def _assemble_feature_table(
     split: str,
     kpx_group: str,
     ecmwf_df: pd.DataFrame | None | str = _ECMWF_FROM_DISK,
+    icon_df: pd.DataFrame | None | str = _ICON_FROM_DISK,
 ) -> pd.DataFrame:
     """Core assembly logic, factored out of `build_feature_table` so tests can
     feed it a small time-sliced subset of already-loaded/renamed LDAPS/GFS
@@ -476,9 +552,13 @@ def _assemble_feature_table(
 
     ecmwf_df: the backfilled ECMWF frame to join (tests pass a synthetic
     frame or None); by default it is loaded from ``ECMWF_PARQUET``.
+    icon_df: the backfilled ICON frame to join (tests pass a synthetic frame
+    or None); by default it is loaded from ``ICON_PARQUET``.
     """
     if isinstance(ecmwf_df, str) and ecmwf_df == _ECMWF_FROM_DISK:
         ecmwf_df = load_ecmwf()
+    if isinstance(icon_df, str) and icon_df == _ICON_FROM_DISK:
+        icon_df = load_icon()
     ldaps_pairs = set(zip(ldaps_renamed["forecast_kst_dtm"], ldaps_renamed["data_available_kst_dtm"]))
     gfs_pairs = set(zip(gfs_renamed["forecast_kst_dtm"], gfs_renamed["data_available_kst_dtm"]))
     if ldaps_pairs != gfs_pairs:
@@ -511,6 +591,10 @@ def _assemble_feature_table(
     # physics batch because the diff/ratio features need ldaps_ws_hub_fixed /
     # gfs_100m_speed_idw to exist on the merged frame.
     merged = _add_ecmwf_features(merged, ecmwf_df)
+
+    # ICON global fourth-source features (same pattern as ECMWF above, see
+    # "ICON global" comment block above ICON_FEATURE_COLS).
+    merged = _add_icon_features(merged, icon_df)
 
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
