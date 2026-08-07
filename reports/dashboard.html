@@ -95,19 +95,19 @@ a{color:var(--accent)}
 <div class="wrap">
   <div class="eyebrow">BARAM 2026 · 풍력발전량 예측 AI 경진대회</div>
   <h1>실험 대시보드 — 모든 시도의 기록</h1>
-  <p class="sub">태백가덕산·원동 풍력 3개 그룹의 시간당 발전량 예측 · 점수 = 0.5·(1−NMAE) + 0.5·FICR · 마지막 갱신 2026-08-07</p>
+  <p class="sub">태백가덕산·원동 풍력 3개 그룹의 시간당 발전량 예측 · 점수 = 0.5·(1−NMAE) + 0.5·FICR · 마지막 갱신 2026-08-07 저녁 (5-프로브 1회차 정산)</p>
 
   <div class="tiles">
-    <div class="tile hero"><div class="k">현재 최고 (실전)</div><div class="v">0.6280</div></div>
-    <div class="tile"><div class="k">시작 대비</div><div class="v">+0.0189</div></div>
+    <div class="tile hero"><div class="k">현재 최고 (실전)</div><div class="v">0.6302</div></div>
+    <div class="tile"><div class="k">시작 대비</div><div class="v">+0.0211</div></div>
     <div class="tile"><div class="k">팀 역대 최고 (원본 v14)</div><div class="v">0.6362</div></div>
     <div class="tile"><div class="k">마감까지</div><div class="v">D-7 <small>8/14 10:00</small></div></div>
-    <div class="tile"><div class="k">제출 실험 / 대기</div><div class="v">8회 <small>+ 오늘 5</small></div></div>
+    <div class="tile"><div class="k">제출 실험 / 대기</div><div class="v">13회</div></div>
   </div>
 
   <div class="grid2" style="margin-top:28px">
     <div class="card">
-      <h2 style="margin-top:0">점수 여정 — 제출 8회의 궤적</h2>
+      <h2 style="margin-top:0">점수 여정 — 제출 13회의 궤적</h2>
       <div class="chartwrap" id="cw">
         <svg viewBox="0 0 720 300" role="img" aria-label="제출 순서에 따른 리더보드 점수 변화. 0.6091에서 시작해 0.6280이 현재 최고.">
           <g stroke="var(--line)" stroke-width="1">
@@ -127,26 +127,31 @@ a{color:var(--accent)}
           <line x1="50" y1="41.9" x2="700" y2="41.9" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="5 4"/>
           <text x="698" y="37" text-anchor="end" font-size="11" fill="var(--gold)" font-weight="700">원본 v14 0.6362 (목표)</text>
           <polyline fill="none" stroke="var(--accent)" stroke-width="2"
-            points="55,197.7 147,177.6 239,151.1 331,119.5 423,127.0 515,132.1 607,89.0 695,94.2"/>
+            points="50,197.7 103,177.6 157,151.1 210,119.5 263,127.0 317,132.1 370,89.0 423,94.2 477,92.5 530,76.4 583,105.1 637,97.1 690,90.7"/>
           <g id="pts" fill="var(--accent)">
-            <circle cx="55" cy="197.7" r="5" data-t="#1 · 7/22 · LightGBM 단독|0.6091 · 시작 기준점"/>
-            <circle cx="147" cy="177.6" r="5" data-t="#2 · 7/23 · GBM 분위수+결정최적화|0.6126 · +0.0035"/>
-            <circle cx="239" cy="151.1" r="5" data-t="#3 · 7/23 · CV최적 블렌드(nested-LOFO)|0.6172 · 이후 고정 가중에 패배"/>
-            <circle cx="331" cy="119.5" r="5" data-t="#4 · 7/23 · v14 고정 블렌드|0.6227 · +0.0055"/>
-            <circle cx="423" cy="127.0" r="5" data-t="#5 · 7/23 · 신경망-heavy 가중|0.6214 · 가중 피크 확인용"/>
-            <circle cx="515" cy="132.1" r="5" data-t="#6 · 7/24 · 배수 재보정 full|0.6205 · 과보정"/>
-            <circle cx="607" cy="89.0" r="7" stroke="var(--card)" stroke-width="2" data-t="#7 · 7/24 · 배수 재보정 half|0.6280 · ★ 현재 최고"/>
-            <circle cx="695" cy="94.2" r="5" data-t="#8 · 7/24 · g3 배수 상향|0.6271 · 과보정 확인"/>
+            <circle cx="50" cy="197.7" r="4.5" data-t="#1 · 7/22 · LightGBM 단독|0.6091 · 시작 기준점"/>
+            <circle cx="103" cy="177.6" r="4.5" data-t="#2 · 7/23 · GBM 분위수+결정최적화|0.6126 · +0.0035"/>
+            <circle cx="157" cy="151.1" r="4.5" data-t="#3 · 7/23 · CV최적 블렌드|0.6172 · 고정 가중에 패배"/>
+            <circle cx="210" cy="119.5" r="4.5" data-t="#4 · 7/23 · v14 고정 블렌드|0.6227 · +0.0055"/>
+            <circle cx="263" cy="127.0" r="4.5" data-t="#5 · 7/23 · 신경망-heavy 가중|0.6214 · 피크 확인"/>
+            <circle cx="317" cy="132.1" r="4.5" data-t="#6 · 7/24 · 재보정 full|0.6205 · 과보정"/>
+            <circle cx="370" cy="89.0" r="4.5" data-t="#7 · 7/24 · 재보정 half|0.6280 · 당시 최고"/>
+            <circle cx="423" cy="94.2" r="4.5" data-t="#8 · 7/24 · g3 배수 상향|0.6271 · 과보정"/>
+            <circle cx="477" cy="92.5" r="4.5" data-t="#9 · 8/7 · 19-분위수|0.6274 · CV방향 미전이"/>
+            <circle cx="530" cy="76.4" r="7" stroke="var(--card)" stroke-width="2" data-t="#10 · 8/7 · ECMWF g1 수확|0.6302 · ★ 신기록"/>
+            <circle cx="583" cy="105.1" r="4.5" data-t="#11 · 8/7 · 계절별 재보정|0.6252 · 역효과"/>
+            <circle cx="637" cy="97.1" r="4.5" data-t="#12 · 8/7 · 재보정 강도 0.6|0.6266 · 피크=0.5 확정"/>
+            <circle cx="690" cy="90.7" r="4.5" data-t="#13 · 8/7 · FICR 가중 0.6|0.6277 · 무승부"/>
           </g>
-          <text x="607" y="72" text-anchor="middle" font-size="12" font-weight="800" fill="var(--accent)">0.6280 ★</text>
-          <text x="55" y="218" text-anchor="middle" font-size="11" fill="var(--ink2)">0.6091</text>
+          <text x="530" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="var(--accent)">0.6302 ★</text>
+          <text x="50" y="218" text-anchor="middle" font-size="11" fill="var(--ink2)">0.6091</text>
           <g fill="var(--ink3)" font-size="11">
-            <text x="55" y="268" text-anchor="middle">1</text><text x="147" y="268" text-anchor="middle">2</text>
-            <text x="239" y="268" text-anchor="middle">3</text><text x="331" y="268" text-anchor="middle">4</text>
-            <text x="423" y="268" text-anchor="middle">5</text><text x="515" y="268" text-anchor="middle">6</text>
-            <text x="607" y="268" text-anchor="middle">7</text><text x="695" y="268" text-anchor="middle">8</text>
+            <text x="50" y="268" text-anchor="middle">1</text><text x="157" y="268" text-anchor="middle">3</text>
+            <text x="263" y="268" text-anchor="middle">5</text><text x="370" y="268" text-anchor="middle">7</text>
+            <text x="477" y="268" text-anchor="middle">9</text><text x="583" y="268" text-anchor="middle">11</text>
+            <text x="690" y="268" text-anchor="middle">13</text>
           </g>
-          <text x="375" y="292" text-anchor="middle" font-size="11" fill="var(--ink3)">제출 순서 (7/22 ~ 7/24) · 점에 마우스를 올리면 상세</text>
+          <text x="375" y="292" text-anchor="middle" font-size="11" fill="var(--ink3)">제출 순서 (7/22 ~ 8/7) · 점에 마우스를 올리면 상세</text>
         </svg>
         <div class="tip" id="tip"></div>
       </div>
@@ -207,12 +212,13 @@ a{color:var(--accent)}
 
   <h2>시도 보드 — 무엇이 통했고 무엇이 죽었나</h2>
   <div class="board">
-    <div class="try"><span class="chip best">최고 기록</span><div class="name">배수 재보정 (절반 강도)</div><div class="why">체계적 6~12% 과소예측 발견 → 그룹별 단일 배수 ×0.5 강도 → 0.6280</div></div>
+    <div class="try"><span class="chip best">최고 기록</span><div class="name">ECMWF g1 수확</div><div class="why">최강 원신호(상관 0.773)를 g1 한정으로 오염 없이 통합 → 0.6302 신기록</div></div>
+    <div class="try"><span class="chip win">채택</span><div class="name">배수 재보정 (절반 강도)</div><div class="why">체계적 6~12% 과소예측 발견 → 그룹별 단일 배수 ×0.5 강도 → 0.6280</div></div>
     <div class="try"><span class="chip win">채택</span><div class="name">GBM 9-분위수 + 결정이론</div><div class="why">발전량 분포 예측 후 대회 점수식 기대효용 최대화 → +0.0035</div></div>
     <div class="try"><span class="chip win">채택</span><div class="name">3-모델 고정 블렌드</div><div class="why">LSTM 0.35 · Transformer 0.35 · GBM 0.30 — 서로 다르게 틀려서 상쇄 → +0.0055</div></div>
     <div class="try"><span class="chip win">채택</span><div class="name">웨이크(후류) 피처</div><div class="why">그룹1이 그룹2 상류 1.3km — 풍향 정렬 피처로 g2 CV +0.0095</div></div>
     <div class="try"><span class="chip win">채택</span><div class="name">비대칭 손실 + pruning</div><div class="why">과소예측 페널티 강화 + 피처 141→65개 — 초기 트랙 0.6091의 뼈대</div></div>
-    <div class="try"><span class="chip run">진행 중</span><div class="name">ECMWF IFS 제3 예보 통합</div><div class="why">예보 품질이 병목 → 세계 최고 정확도 NWP를 재료로 추가 (커버리지 2024-05+)</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">미세조정 노브 4종 (8/7)</div><div class="why">계절배수·강도0.6·FICR가중·19분위수 — 전부 패배. 조정은 소진, 재료가 답</div></div>
     <div class="try"><span class="chip run">진행 중</span><div class="name">일일 5-프로브 체제</div><div class="why">CV가 못 가르는 차이를 리더보드로 판정 — w_ficr·월별배수·가중 프로브 대기</div></div>
     <div class="try"><span class="chip lose">기각</span><div class="name">CV최적 블렌드 가중치</div><div class="why">CV론 최적인데 실전 0.6172 &lt; 고정 0.6227 — 교훈 1의 결정적 증거</div></div>
     <div class="try"><span class="chip lose">기각</span><div class="name">물리 피처 5배치</div><div class="why">공기밀도·전단·풍향섹터·격자분산·SCADA커브 — 대부분 기존 신호와 중복(노이즈)</div></div>
@@ -236,9 +242,13 @@ a{color:var(--accent)}
         <tr><td>4</td><td>7/23</td><td>v14 고정 균등 블렌드</td><td class="num">0.6227</td><td>✅ +0.0055</td></tr>
         <tr><td>5</td><td>7/23</td><td>신경망-heavy 가중 (GBM 0.20)</td><td class="num">0.6214</td><td>❌ 가중 피크 확인</td></tr>
         <tr><td>6</td><td>7/24</td><td>배수 재보정 전체 강도</td><td class="num">0.6205</td><td>❌ 과보정</td></tr>
-        <tr class="best"><td>7</td><td>7/24</td><td>배수 재보정 절반 강도</td><td class="num">0.6280</td><td>★ 현재 최고</td></tr>
+        <tr><td>7</td><td>7/24</td><td>배수 재보정 절반 강도</td><td class="num">0.6280</td><td>✅ 당시 최고</td></tr>
         <tr><td>8</td><td>7/24</td><td>g3 배수만 상향</td><td class="num">0.6271</td><td>❌ 과보정 확인</td></tr>
-        <tr><td>9~13</td><td>8/7</td><td>오늘 프로브 5종: w_ficr 0.6 · 월별 배수 · 강도 0.6 · 물리 GBM · 가중 0.25</td><td class="num">대기</td><td>제출 대기 중</td></tr>
+        <tr><td>9</td><td>8/7</td><td>19-분위수 분포 해상도</td><td class="num">0.6274</td><td>❌ CV방향 미전이</td></tr>
+        <tr class="best"><td>10</td><td>8/7</td><td>ECMWF g1 수확 (제3 예보)</td><td class="num">0.6302</td><td>★ 신기록 +0.0022</td></tr>
+        <tr><td>11</td><td>8/7</td><td>계절별 재보정 배수</td><td class="num">0.6252</td><td>❌ 역효과</td></tr>
+        <tr><td>12</td><td>8/7</td><td>재보정 강도 0.6</td><td class="num">0.6266</td><td>❌ 피크=0.5 확정</td></tr>
+        <tr><td>13</td><td>8/7</td><td>결정단계 FICR 가중 0.6</td><td class="num">0.6277</td><td>❌ 무승부</td></tr>
       </tbody>
     </table>
   </div>
