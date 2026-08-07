@@ -39,6 +39,7 @@ import pandas as pd
 import yaml
 
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
+from src.features.decision_optimize import QUANTILES, QUANTILES_19
 from src.models.lgbm_quantile_model import (
     DEFAULT_EARLY_STOPPING_ROUNDS,
     DEFAULT_PARAMS,
@@ -68,10 +69,22 @@ def _load_baseline_metrics() -> dict[str, Any] | None:
         return json.load(f)
 
 
-def run_group(kpx_group: str, n_splits: int, feature_set: str, early_stopping_rounds: int) -> dict[str, Any]:
+def run_group(
+    kpx_group: str,
+    n_splits: int,
+    feature_set: str,
+    early_stopping_rounds: int,
+    quantiles: list[float] | None = None,
+) -> dict[str, Any]:
     """Run block-aware CV + a final full-data refit for one kpx_group's
     ``GroupLGBMQuantileModel``, using the fixed spec starting hyperparameters
     (no Optuna search -- see module docstring).
+
+    ``quantiles``: probability levels each sub-model is fit at. ``None``
+    (default) keeps the original 9-level ``decision_optimize.QUANTILES``
+    behavior; experiment_queue.md #4 passes ``QUANTILES_19`` (19 levels) via
+    ``--n-quantiles 19`` to test whether finer distribution resolution helps
+    the decision-optimal post-processing.
     """
     path = DATA_PROCESSED_DIR / f"features_{kpx_group}_train.parquet"
     df = pd.read_parquet(path)
@@ -83,13 +96,17 @@ def run_group(kpx_group: str, n_splits: int, feature_set: str, early_stopping_ro
     feature_cols = _get_feature_cols(df, kpx_group=kpx_group, feature_set=feature_set)
     capacity = GROUP_CAPACITY_KWH[kpx_group]
 
+    params: dict[str, Any] = dict(DEFAULT_PARAMS)
+    if quantiles is not None:
+        params["quantiles"] = list(quantiles)
+
     oof_df, fold_meta = oof_predict_generic(
         df,
         feature_cols,
         capacity,
         kpx_group,
         GroupLGBMQuantileModel,
-        DEFAULT_PARAMS,
+        params,
         early_stopping_rounds,
         n_splits,
     )
@@ -115,7 +132,7 @@ def run_group(kpx_group: str, n_splits: int, feature_set: str, early_stopping_ro
     # value, see GroupLGBMQuantileModel's docstring), same convention every
     # other model track in this repo uses.
     best_iterations = [f["best_iteration"] for f in fold_metrics if f["best_iteration"]]
-    final_params: dict[str, Any] = dict(DEFAULT_PARAMS)
+    final_params: dict[str, Any] = dict(params)
     if best_iterations:
         final_params["n_estimators"] = max(int(round(float(np.mean(best_iterations)))), 50)
 
@@ -160,11 +177,26 @@ def main() -> str:
         ),
     )
     parser.add_argument("--early-stopping-rounds", type=int, default=DEFAULT_EARLY_STOPPING_ROUNDS)
+    parser.add_argument(
+        "--n-quantiles",
+        type=int,
+        choices=(9, 19),
+        default=9,
+        help=(
+            "9 (default, unchanged behavior): decision_optimize.QUANTILES. "
+            "19: decision_optimize.QUANTILES_19 (0.05 step, [0.05..0.95]) -- "
+            "experiment_queue.md #4's higher-resolution decision-optimization probe."
+        ),
+    )
     args = parser.parse_args()
+
+    quantiles = QUANTILES_19 if args.n_quantiles == 19 else QUANTILES
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_gbm_quantile"
     if args.feature_set == "pruned":
         run_id += "_pruned"
+    if args.n_quantiles != 9:
+        run_id += f"_q{args.n_quantiles}"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -176,6 +208,7 @@ def main() -> str:
             n_splits=args.n_splits,
             feature_set=args.feature_set,
             early_stopping_rounds=args.early_stopping_rounds,
+            quantiles=quantiles,
         )
 
         model_path = run_dir / f"model_{kpx_group}.joblib"
@@ -193,6 +226,8 @@ def main() -> str:
         "n_splits": args.n_splits,
         "feature_set": args.feature_set,
         "model_default_params": DEFAULT_PARAMS,
+        "n_quantiles": args.n_quantiles,
+        "quantiles": quantiles,
         "early_stopping_rounds": args.early_stopping_rounds,
         "git_commit": _get_git_commit(),
         "final_n_estimators_per_group": {g: all_results[g]["final_n_estimators"] for g in KPX_GROUPS},

@@ -32,7 +32,7 @@
 | 1 | 물리승자 GBM 스왑 블렌드 | 물리 피처(격자분산·ρv³)가 실전에서 통하나 (CV +0.0012 노이즈 → 리더보드로 해상) | 기존 run `20260724_162111` GBM test 예측 → 블렌드에서 GBM만 교체 → half 재보정. lightgbm 설치 필요 | 생성완료 (`submission_20260724_probe_physicsgbm_halfrecal.csv`) |
 | 2 | 결정최적화 w_ficr=0.6 | FICR 가중 상향이 실전 FICR을 더 버나 (CV 평탄 → 리더보드로) | 기존 GBM 모델 로드 → w_ficr=0.6로 결정단계만 재실행 → 스왑+재보정 | 생성완료 (`submission_20260724_probe_wficr06_halfrecal.csv`) |
 | 3 | ECMWF IFS 피처 (부분 커버리지) | 제3 NWP가 신호를 더하나. 커버리지 2024-04+뿐이지만 **LightGBM은 NaN 네이티브 처리** → 결측 그대로 두고 학습 가능 | Open-Meteo Previous Runs API `previous_day2`(D-2 12z, 리키지 검증 tests/test_ecmwf.py) 백필 → `data/interim/ecmwf_ifs.parquet` → 피처 11개 병합 → GBM 재학습 `20260807_142800` | 생성완료 (`submission_20260807_probe_ecmwf_halfrecal.csv`). CV 전체 0.6018 vs 기준 0.6038 (-0.0020, 노이즈권). 커버 구간(2024-04+) OOF: g1 +0.0038 / g2 **-0.0229** / g3 -0.0006 → 커버 구간에서도 순증 없음(g2 악화 주도). ecmwf_ws100-target corr 0.773 > ldaps 0.744로 원신호는 강함 — 기대 낮게 리더보드로 최종 판정 |
-| 4 | 19-분위수 GBM | 분포 해상도↑ → 결정최적화 정밀도↑ | 분위수 19개로 재학습(CPU) | 대기 |
+| 4 | 19-분위수 GBM | 분포 해상도↑ → 결정최적화 정밀도↑ | 분위수 19개로 재학습(CPU) | 생성완료 (`submission_20260807_probe_q19_halfrecal.csv`). 원본(기준) 피처셋으로 재학습(run `20260807_192239_gbm_quantile_pruned_q19`). CV overall 0.6051 vs 기준 0.6038 (+0.0013), 3그룹 전부 동일 방향 개선(g1 0.6102 +0.0009 / g2 0.6344 +0.0007 / g3 0.5706 +0.0022) — 노이즈 경계선(±0.001)이지만 방향이 일관돼 실전 프로브로 판정 |
 | 5 | 월별 재보정 배수 (절반 강도) | 편향의 계절성(겨울↑여름↓, ficr_gap_diagnosis 근거) 반영 | OOF에서 월별 factor fit(연간 배수로 50% 수축) → 절반 강도 → base에 적용 | 생성완료 (`submission_20260807_probe_monthlyrecal_half.csv`) |
 | 6 | 블렌드 가중 GBM 0.25 프로브 | 0.20/0.30 사이 미확인 지점 (half 재보정 위에서 비교) | base·gbm20 CSV 행별 평균 → half 배수 → clip | 생성완료 (`submission_20260807_probe_gbm25_halfrecal.csv`) |
 | 6b | 재보정 강도 0.6 | 강도 곡선 0.5(0.6280)↔1.0(0.6205) 사이, 피크가 0.5 오른쪽인지 | base × (1+0.6×(full배수−1)) = g1 1.072/g2 1.036/g3 1.069 → clip | 생성완료 (`submission_20260807_probe_strength06.csv`) |
@@ -40,7 +40,7 @@
 | 8 | GBM 시드 배깅 (3시드) | 분위수 추정 분산 축소 | seed 3개 재학습 후 분위수 평균(CPU) | 대기 |
 | 9 | 풍속 quantile-mapping 편향보정 | LDAPS 풍속의 분포 편향을 SCADA 실측 풍속으로 교정(학습기간 fit, test 적용 가능 함수) | 매핑 fit → 피처 추가 → 재학습 | 대기 |
 | 10 | ICON 예보 보조 (2023+) | 제4 NWP 보조 신호 | Open-Meteo, ECMWF 결과 좋을 때만 | 대기 |
-| 12 | ECMWF g1 한정 재시도 | ECMWF 원신호는 target 상관 0.773으로 LDAPS(0.744)보다 강한데 g2가 통합을 망침(-0.0229) — g1만(+0.0038) 쓰면 순증인가 | 그룹별 선택 포함으로 재학습(CPU) | 대기 |
+| 12 | ECMWF g1 한정 재시도 | ECMWF 원신호는 target 상관 0.773으로 LDAPS(0.744)보다 강한데 g2가 통합을 망침(-0.0229) — g1만(+0.0038) 쓰면 순증인가 | 그룹별 선택 포함으로 재학습(CPU) | 생성완료 (`submission_20260807_probe_ecmwfg1_halfrecal.csv`). `configs/selected_features.json`에 g1만 ECMWF 11개 피처 영구 반영(manual_overrides 기록, 2026-08-07). run `20260807_191416_gbm_quantile_pruned`: CV overall 0.6042 vs 기준 0.6038 (+0.0004), g1 전체 CV 0.6104(+0.0011)/커버구간(2024-04+) OOF 0.6411 vs 기준 0.6373 (**+0.0038, 이전 전체그룹 실험과 정확히 일치**) — g2/g3 예측값이 기준과 완전히 동일함을 직접 확인(byte-identical, 버그 없음). 가설 확인: g1 단독 적용 시 g2 오염 없이 순증 |
 | 11 | torch 재설치 + 신경망 재통합 | 신경망 트랙 복구 (현재 블렌드는 기존 CSV 산술로만 유지 가능) | ~2.5GB 설치, 필요 시점에 | 보류 |
 
 ## 결과 장부

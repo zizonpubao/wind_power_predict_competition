@@ -58,6 +58,15 @@ from src.evaluation.metrics import (
 
 QUANTILES: list[float] = [0.05, 0.15, 0.25, 0.35, 0.5, 0.65, 0.75, 0.85, 0.95]
 
+# Higher-resolution alternative (experiment_queue.md #4): 19 levels at a 0.05
+# step from 0.05 to 0.95 inclusive, vs. QUANTILES' 9 levels at a 0.10-ish
+# step. Not used anywhere by default -- opt-in only, via
+# ``GroupLGBMQuantileModel(quantiles=QUANTILES_19)`` /
+# ``src.training.train_gbm_quantile --n-quantiles 19`` -- so every existing
+# caller that relies on the module-level ``QUANTILES`` default (9 levels)
+# keeps behaving exactly as before.
+QUANTILES_19: list[float] = [round(0.05 + 0.05 * i, 2) for i in range(19)]
+
 # Numerical-safety epsilons -- never let a degenerate (zero-width / zero-mass)
 # input produce a NaN or a divide-by-zero.
 _WIDTH_EPS = 1e-9

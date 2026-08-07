@@ -125,13 +125,31 @@ class GroupLGBMQuantileModel:
     see ``tests/test_lgbm_quantile_model.py``'s round-trip test.
     """
 
-    def __init__(self, capacity_kwh: float, **lgbm_params: Any):
+    def __init__(
+        self,
+        capacity_kwh: float,
+        quantiles: list[float] | None = None,
+        **lgbm_params: Any,
+    ):
         if "monotonic_constraints" in lgbm_params:
             raise ValueError(
                 "GroupLGBMQuantileModel must not be given monotonic_constraints -- "
                 "LightGBM's quantile objective is incompatible with it (see class docstring)."
             )
         self.capacity_kwh = float(capacity_kwh)
+        # ``quantiles``: which probability levels to fit one sub-model each
+        # for (experiment_queue.md #4's 19-quantile resolution experiment).
+        # Defaults to the module-level 9-level ``QUANTILES`` -- every existing
+        # caller that never passes this kwarg keeps its exact prior behavior.
+        # MEDIAN_QUANTILE (0.5) must always be present, since fit() reads its
+        # best_iteration_ from that one sub-model (see class docstring's
+        # "best_iteration_ convention").
+        self.quantiles: list[float] = list(quantiles) if quantiles is not None else list(QUANTILES)
+        if MEDIAN_QUANTILE not in self.quantiles:
+            raise ValueError(
+                f"quantiles must include the median level {MEDIAN_QUANTILE} "
+                f"(best_iteration_ convention), got {self.quantiles}"
+            )
         self.params: dict[str, Any] = {**DEFAULT_PARAMS, **lgbm_params}
         self.models_: dict[float, lgb.LGBMRegressor] = {}
         self.best_iteration_: int | None = None
@@ -165,7 +183,7 @@ class GroupLGBMQuantileModel:
         )
 
         self.models_ = {}
-        for q in QUANTILES:
+        for q in self.quantiles:
             params = dict(self.params)
             params["objective"] = "quantile"
             params["alpha"] = q
@@ -189,7 +207,12 @@ class GroupLGBMQuantileModel:
         ``(n_rows, 9)`` in ``QUANTILES`` order. Diagnostic/testing use --
         ``predict`` is the one CV/inference actually calls.
         """
-        preds = [self.models_[q].predict(X) for q in QUANTILES]
+        # getattr fallback: older joblib-pickled instances (created before the
+        # ``quantiles`` constructor kwarg existed) restore their __dict__ as-is
+        # on unpickling (no __init__ call), so they lack this attribute --
+        # fall back to the original module-level 9-level QUANTILES for those.
+        quantiles = getattr(self, "quantiles", None) or QUANTILES
+        preds = [self.models_[q].predict(X) for q in quantiles]
         return np.stack(preds, axis=1)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -205,5 +228,6 @@ class GroupLGBMQuantileModel:
         """
         raw = self.predict_quantiles(X)
         sorted_q = enforce_monotonic_quantiles(raw)
-        decision = decision_optimal_point_prediction(sorted_q, QUANTILES, self.capacity_kwh)
+        quantiles = getattr(self, "quantiles", None) or QUANTILES
+        decision = decision_optimal_point_prediction(sorted_q, quantiles, self.capacity_kwh)
         return np.clip(decision, 0.0, self.capacity_kwh * 1.01)

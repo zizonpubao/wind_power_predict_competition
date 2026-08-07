@@ -13,6 +13,24 @@
         "wake_deficit_proxy_g1g2"
       ],
       "reason": "New wake-alignment features from reports/domain_research/wake_effect.md, force-included ahead of any gain-based re-selection because they postdate the 20260721_205339_lgbm_tuned run this file was generated from (that run's model never saw these columns, so it has no gain to rank them by). Forcing them into the pruned set lets this round's CV comparison actually test whether they help before a future feature-selection re-run either keeps or drops them on their own gain merit."
+    },
+    {
+      "date": "2026-08-07",
+      "group": "kpx_group_1",
+      "added_features": [
+        "ecmwf_ws100",
+        "ecmwf_ws10",
+        "ecmwf_ws100_cubed",
+        "ecmwf_dir_sin",
+        "ecmwf_dir_cos",
+        "ecmwf_t2m",
+        "ecmwf_sp",
+        "ecmwf_minus_ldaps_ws10",
+        "ecmwf_minus_ldaps_hub",
+        "ecmwf_ldaps_ws_ratio",
+        "ecmwf_minus_gfs_ws100"
+      ],
+      "reason": "Experiment queue #12 retry: run 20260807_142800_gbm_quantile_pruned added these 11 ECMWF features to ALL 3 groups and found g1 covered-window OOF +0.0038 but g2 -0.0229 (net -0.0020) -- g2 got worse, not g1. ecmwf_ws100-target corr (0.773) is stronger than ldaps (0.744), so the hypothesis is that g2 is being polluted by something group-specific (its wake-effect features already encode g1's upstream wind, possibly redundant/conflicting with ecmwf's own signal) while g1 itself benefits. This override adds ECMWF features to g1 ONLY, leaving g2/g3 untouched, to test that hypothesis in isolation. THIS IS A TEMPORARY EXPERIMENTAL CHANGE -- reverted after CV comparison unless g1 shows a clear net gain (see reports/experiment_queue.md #12 for the outcome)."
     }
   ],
   "groups": {
@@ -51,6 +69,17 @@
         "gfs_10m_speed_mean",
         "gfs_100m_dir_sin",
         "gfs_pbl_speed_mean",
+        "ecmwf_ws100",
+        "ecmwf_ws10",
+        "ecmwf_ws100_cubed",
+        "ecmwf_dir_sin",
+        "ecmwf_dir_cos",
+        "ecmwf_t2m",
+        "ecmwf_sp",
+        "ecmwf_minus_ldaps_ws10",
+        "ecmwf_minus_ldaps_hub",
+        "ecmwf_ldaps_ws_ratio",
+        "ecmwf_minus_gfs_ws100",
         "lead_hour",
         "ldaps_10m_speed_idw_roll_mean_3h",
         "ldaps_10m_speed_idw_roll_mean_6h",
@@ -84,7 +113,7 @@
         "gfs_pbl_power_curve_idw_roll_std_12h",
         "gfs_pbl_power_curve_idw_roll_mean_24h"
       ],
-      "n_selected": 65,
+      "n_selected": 76,
       "n_total": 141,
       "excluded_features": [
         "ldaps_10m_dir_sin",
