@@ -1,0 +1,282 @@
+<title>BARAM 2026 실험 대시보드</title>
+<style>
+:root{
+  --bg:#f5f7f9; --card:#ffffff; --ink:#141a21; --ink2:#5a6673; --ink3:#8b97a3;
+  --line:#e3e8ed; --accent:#2a78d6; --accent-soft:#e8f1fb;
+  --good:#0ca30c; --good-soft:#e9f6e9; --bad:#8b97a3; --bad-soft:#f0f2f4;
+  --run:#2a78d6; --run-soft:#e8f1fb; --gold:#b8860b; --gold-soft:#faf3e0;
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])){
+    --bg:#15181c; --card:#1d2126; --ink:#eef2f6; --ink2:#a6b0ba; --ink3:#76808a;
+    --line:#2c3238; --accent:#3987e5; --accent-soft:#1c2938;
+    --good:#3dbb3d; --good-soft:#1c2b1c; --bad:#76808a; --bad-soft:#252a30;
+    --run:#3987e5; --run-soft:#1c2938; --gold:#d9a520; --gold-soft:#2e2716;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15181c; --card:#1d2126; --ink:#eef2f6; --ink2:#a6b0ba; --ink3:#76808a;
+  --line:#2c3238; --accent:#3987e5; --accent-soft:#1c2938;
+  --good:#3dbb3d; --good-soft:#1c2b1c; --bad:#76808a; --bad-soft:#252a30;
+  --run:#3987e5; --run-soft:#1c2938; --gold:#d9a520; --gold-soft:#2e2716;
+}
+:root[data-theme="light"]{
+  --bg:#f5f7f9; --card:#ffffff; --ink:#141a21; --ink2:#5a6673; --ink3:#8b97a3;
+  --line:#e3e8ed; --accent:#2a78d6; --accent-soft:#e8f1fb;
+  --good:#0ca30c; --good-soft:#e9f6e9; --bad:#8b97a3; --bad-soft:#f0f2f4;
+  --run:#2a78d6; --run-soft:#e8f1fb; --gold:#b8860b; --gold-soft:#faf3e0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,sans-serif;
+  line-height:1.6}
+.wrap{max-width:1080px;margin:0 auto;padding:40px 24px 64px}
+.eyebrow{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700;text-transform:uppercase}
+h1{font-size:30px;margin:6px 0 4px;font-weight:800;letter-spacing:-.02em;text-wrap:balance}
+.sub{color:var(--ink2);font-size:14px;margin:0 0 26px}
+h2{font-size:18px;font-weight:700;margin:36px 0 14px;letter-spacing:-.01em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.tile .k{font-size:12px;color:var(--ink2)}
+.tile .v{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile .v small{font-size:13px;font-weight:600;color:var(--ink2)}
+.tile.hero{border-color:var(--accent);background:var(--accent-soft)}
+.tile.hero .v{color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+.grid2{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:840px){.grid2{grid-template-columns:1.6fr 1fr}}
+.chartwrap{position:relative}
+svg{display:block;width:100%;height:auto}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);
+  font-size:12px;line-height:1.45;padding:7px 10px;border-radius:8px;white-space:nowrap;
+  transform:translate(-50%,-115%);opacity:0;transition:opacity .12s}
+@media (prefers-reduced-motion: reduce){.tip{transition:none}}
+.lesson{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.lesson:last-child{border-bottom:none}
+.lesson b{color:var(--ink)}
+.lesson .n{color:var(--accent);font-weight:800;font-variant-numeric:tabular-nums}
+.board{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.try{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:13px}
+.try .name{font-weight:700;font-size:13.5px;margin-bottom:2px}
+.try .why{color:var(--ink2);font-size:12.5px}
+.chip{display:inline-block;font-size:11px;font-weight:700;border-radius:99px;padding:2px 9px;margin-bottom:6px}
+.chip.win{background:var(--good-soft);color:var(--good)}
+.chip.lose{background:var(--bad-soft);color:var(--bad)}
+.chip.run{background:var(--run-soft);color:var(--run)}
+.chip.best{background:var(--gold-soft);color:var(--gold)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-size:12px;color:var(--ink2);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td.num{font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
+tr.best td{background:var(--accent-soft)}
+.tablewrap{overflow-x:auto}
+.qitem{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.qitem:last-child{border-bottom:none}
+.qitem .qn{color:var(--ink3);font-variant-numeric:tabular-nums;font-weight:700;min-width:20px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.fact .fv{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+.fact .fk{font-size:12px;color:var(--ink2);line-height:1.45}
+.barrow{display:grid;grid-template-columns:150px 1fr 90px;gap:12px;align-items:center;padding:6px 0;font-size:13px}
+.barrail{background:var(--bad-soft);border-radius:5px;height:14px;position:relative;overflow:hidden}
+.barfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:5px}
+.barrow .bl{color:var(--ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.barrow .bn{color:var(--ink2);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;font-size:12.5px}
+.dead .barfill{background:var(--ink3);opacity:.45}
+.pill{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:99px;font-size:12px;font-weight:700;padding:2px 10px;margin:2px 4px 2px 0}
+.ficr{border-collapse:collapse;font-size:13px;width:100%}
+.ficr td,.ficr th{border:1px solid var(--line);padding:6px 10px;text-align:center}
+.ficr th{background:var(--bad-soft);font-size:12px;color:var(--ink2)}
+footer{margin-top:36px;color:var(--ink3);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+code{font-family:Consolas,monospace;font-size:.92em;background:var(--bad-soft);padding:1px 5px;border-radius:4px}
+a{color:var(--accent)}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">BARAM 2026 · 풍력발전량 예측 AI 경진대회</div>
+  <h1>실험 대시보드 — 모든 시도의 기록</h1>
+  <p class="sub">태백가덕산·원동 풍력 3개 그룹의 시간당 발전량 예측 · 점수 = 0.5·(1−NMAE) + 0.5·FICR · 마지막 갱신 2026-08-07</p>
+
+  <div class="tiles">
+    <div class="tile hero"><div class="k">현재 최고 (실전)</div><div class="v">0.6280</div></div>
+    <div class="tile"><div class="k">시작 대비</div><div class="v">+0.0189</div></div>
+    <div class="tile"><div class="k">팀 역대 최고 (원본 v14)</div><div class="v">0.6362</div></div>
+    <div class="tile"><div class="k">마감까지</div><div class="v">D-7 <small>8/14 10:00</small></div></div>
+    <div class="tile"><div class="k">제출 실험 / 대기</div><div class="v">8회 <small>+ 오늘 5</small></div></div>
+  </div>
+
+  <div class="grid2" style="margin-top:28px">
+    <div class="card">
+      <h2 style="margin-top:0">점수 여정 — 제출 8회의 궤적</h2>
+      <div class="chartwrap" id="cw">
+        <svg viewBox="0 0 720 300" role="img" aria-label="제출 순서에 따른 리더보드 점수 변화. 0.6091에서 시작해 0.6280이 현재 최고.">
+          <g stroke="var(--line)" stroke-width="1">
+            <line x1="50" y1="250" x2="700" y2="250"/>
+            <line x1="50" y1="192.5" x2="700" y2="192.5"/>
+            <line x1="50" y1="135" x2="700" y2="135"/>
+            <line x1="50" y1="77.5" x2="700" y2="77.5"/>
+            <line x1="50" y1="20" x2="700" y2="20"/>
+          </g>
+          <g fill="var(--ink3)" font-size="11" font-variant-numeric="tabular-nums">
+            <text x="44" y="254" text-anchor="end">0.600</text>
+            <text x="44" y="196.5" text-anchor="end">0.610</text>
+            <text x="44" y="139" text-anchor="end">0.620</text>
+            <text x="44" y="81.5" text-anchor="end">0.630</text>
+            <text x="44" y="24" text-anchor="end">0.640</text>
+          </g>
+          <line x1="50" y1="41.9" x2="700" y2="41.9" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text x="698" y="37" text-anchor="end" font-size="11" fill="var(--gold)" font-weight="700">원본 v14 0.6362 (목표)</text>
+          <polyline fill="none" stroke="var(--accent)" stroke-width="2"
+            points="55,197.7 147,177.6 239,151.1 331,119.5 423,127.0 515,132.1 607,89.0 695,94.2"/>
+          <g id="pts" fill="var(--accent)">
+            <circle cx="55" cy="197.7" r="5" data-t="#1 · 7/22 · LightGBM 단독|0.6091 · 시작 기준점"/>
+            <circle cx="147" cy="177.6" r="5" data-t="#2 · 7/23 · GBM 분위수+결정최적화|0.6126 · +0.0035"/>
+            <circle cx="239" cy="151.1" r="5" data-t="#3 · 7/23 · CV최적 블렌드(nested-LOFO)|0.6172 · 이후 고정 가중에 패배"/>
+            <circle cx="331" cy="119.5" r="5" data-t="#4 · 7/23 · v14 고정 블렌드|0.6227 · +0.0055"/>
+            <circle cx="423" cy="127.0" r="5" data-t="#5 · 7/23 · 신경망-heavy 가중|0.6214 · 가중 피크 확인용"/>
+            <circle cx="515" cy="132.1" r="5" data-t="#6 · 7/24 · 배수 재보정 full|0.6205 · 과보정"/>
+            <circle cx="607" cy="89.0" r="7" stroke="var(--card)" stroke-width="2" data-t="#7 · 7/24 · 배수 재보정 half|0.6280 · ★ 현재 최고"/>
+            <circle cx="695" cy="94.2" r="5" data-t="#8 · 7/24 · g3 배수 상향|0.6271 · 과보정 확인"/>
+          </g>
+          <text x="607" y="72" text-anchor="middle" font-size="12" font-weight="800" fill="var(--accent)">0.6280 ★</text>
+          <text x="55" y="218" text-anchor="middle" font-size="11" fill="var(--ink2)">0.6091</text>
+          <g fill="var(--ink3)" font-size="11">
+            <text x="55" y="268" text-anchor="middle">1</text><text x="147" y="268" text-anchor="middle">2</text>
+            <text x="239" y="268" text-anchor="middle">3</text><text x="331" y="268" text-anchor="middle">4</text>
+            <text x="423" y="268" text-anchor="middle">5</text><text x="515" y="268" text-anchor="middle">6</text>
+            <text x="607" y="268" text-anchor="middle">7</text><text x="695" y="268" text-anchor="middle">8</text>
+          </g>
+          <text x="375" y="292" text-anchor="middle" font-size="11" fill="var(--ink3)">제출 순서 (7/22 ~ 7/24) · 점에 마우스를 올리면 상세</text>
+        </svg>
+        <div class="tip" id="tip"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">4가지 핵심 교훈</h2>
+      <div class="lesson"><span class="n">1</span><span><b>CV ≠ 리더보드.</b> 교차검증으로 미세 최적화한 것(블렌드 가중치, NN 튜닝)은 실전에서 배신했다. 단순·견고한 선택이 이겼다.</span></div>
+      <div class="lesson"><span class="n">2</span><span><b>자유도가 적을수록 전이가 잘 된다.</b> 유연한 isotonic 보정은 과적합으로 실패, 파라미터 1개짜리 배수 보정은 +0.0053 성공.</span></div>
+      <div class="lesson"><span class="n">3</span><span><b>지표 구조를 직접 공략하라.</b> FICR은 오차율 6%/8%의 계단 지표 — 분포를 예측하고 기대효용을 최대화하는 결정이론이 돈이 됐다.</span></div>
+      <div class="lesson"><span class="n">4</span><span><b>천장을 알면 전략이 바뀐다.</b> 주어진 예보에서 뽑을 신호는 거의 소진 — 이제 하루 5회 제출을 실험 장비로 쓰고, ECMWF로 재료 자체를 업그레이드 중.</span></div>
+    </div>
+  </div>
+
+  <h2>데이터 · EDA 핵심 — 이 문제의 지형</h2>
+  <div class="facts">
+    <div class="fact"><div class="fv">3그룹 · 26,304시간</div><div class="fk">학습 2022~24 (g3는 2023부터 17,544시간) · 예측 대상은 2025년 8,760시간</div></div>
+    <div class="fact"><div class="fv">r = 0.73 vs 0.55</div><div class="fk">발전량과의 상관: LDAPS(1.5km) vs GFS(25km) — LDAPS가 주 재료인 이유</div></div>
+    <div class="fact"><div class="fv">62~66% 과소예측</div><div class="fk">모델이 발전량을 낮게 부르는 체계적 편향 (평균 −0.7~−1.2 MWh) → 배수 재보정의 근거</div></div>
+    <div class="fact"><div class="fv">중앙값 17~19%p</div><div class="fk">큰 오차(&gt;8%)는 절벽을 살짝 넘는 게 아니라 크게 빗나감 — 후처리로 못 구함</div></div>
+    <div class="fact"><div class="fv">±20% 산포</div><div class="fk">같은 예보풍속에서도 실제 발전이 ±20% 흩어짐 — 남은 오차는 예보 품질 한계 (천장 분석)</div></div>
+    <div class="fact"><div class="fv">115° · 1.28km</div><div class="fk">그룹1→그룹2 방위·거리 — 같은 능선 위 웨이크(후류) 관계, g2 전용 피처의 근거</div></div>
+    <div class="fact"><div class="fv">SCADA r = 0.999</div><div class="fk">터빈 10분 실측을 합산하면 라벨과 거의 일치 (단 극단값 0.48% 마스킹 필수, test엔 없음)</div></div>
+    <div class="fact"><div class="fv">발표묶음 24시간</div><div class="fk">예보는 전날 발표분만 사용 가능 — CV를 이 묶음 단위로 끊어야 미래정보 누수(leakage)가 없음</div></div>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="card">
+      <h2 style="margin-top:0">피처 엔지니어링 현황 — 만든 196개 중 쓰는 65~67개</h2>
+      <div class="barrow"><span class="bl">시간구조 (롤링 3~24h)</span><div class="barrail"><div class="barfill" style="width:34%"></div></div><span class="bn">23~31 / 80</span></div>
+      <div class="barrow"><span class="bl">GFS 풍속 (4고도 u·v)</span><div class="barrail"><div class="barfill" style="width:67%"></div></div><span class="bn">15~17 / 24</span></div>
+      <div class="barrow"><span class="bl">LDAPS 풍속 (10m)</span><div class="barrail"><div class="barfill" style="width:83%"></div></div><span class="bn">4~6 / 6</span></div>
+      <div class="barrow"><span class="bl">LDAPS 스칼라 (기온·기압·경계층)</span><div class="barrail"><div class="barfill" style="width:100%"></div></div><span class="bn">6 / 6</span></div>
+      <div class="barrow"><span class="bl">GFS 스칼라 (일사·운량 등)</span><div class="barrail"><div class="barfill" style="width:50%"></div></div><span class="bn">4 / 8</span></div>
+      <div class="barrow"><span class="bl">풍향 (sin·cos·각도)</span><div class="barrail"><div class="barfill" style="width:27%"></div></div><span class="bn">1~6 / 15</span></div>
+      <div class="barrow"><span class="bl">파워커브 변환</span><div class="barrail"><div class="barfill" style="width:26%"></div></div><span class="bn">1~2 / 5</span></div>
+      <div class="barrow"><span class="bl">웨이크 (g2 전용)</span><div class="barrail"><div class="barfill" style="width:33%"></div></div><span class="bn">g2만 3 / 3</span></div>
+      <div class="barrow dead"><span class="bl">물리 5배치 (밀도·전단·격자분산…)</span><div class="barrail"><div class="barfill" style="width:3%"></div></div><span class="bn">0 / 29 기각</span></div>
+      <div class="barrow dead"><span class="bl">허브외삽·캘린더 (Phase A)</span><div class="barrail"><div class="barfill" style="width:3%"></div></div><span class="bn">0 / 29 기각</span></div>
+      <p style="font-size:12.5px;color:var(--ink2);margin:10px 0 0">막대 = 만든 피처 중 실제 학습에 채택된 비율(gain 95% 누적 pruning). 기각 배치도 코드는 보존 — "무엇이 안 되는지"의 증거.
+      gain 상위: <span class="pill">GFS 80/100m 바람 u</span><span class="pill">LDAPS 풍속·롤링</span><span class="pill">일사량(dswrf)</span><span class="pill">경계층높이(blh)</span></p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">채점 방식 — FICR 계단이 전략을 결정</h2>
+      <p style="font-size:13.5px;margin:0 0 10px">점수 = 0.5·(1−NMAE) + 0.5·FICR. FICR은 시간대별 오차율에 따라 정산 단가가 <b>계단식</b>으로 떨어지는 지표라, 오차를 "6% 안쪽으로 넣는 것"이 평균 오차를 줄이는 것보다 돈이 된다.</p>
+      <table class="ficr">
+        <thead><tr><th>시간대 오차율</th><th>정산 단가</th><th>의미</th></tr></thead>
+        <tbody>
+          <tr><td>≤ 6%</td><td><b>4원/kWh</b></td><td>만점 구간</td></tr>
+          <tr><td>6 ~ 8%</td><td><b>3원/kWh</b></td><td>부분 정산</td></tr>
+          <tr><td>&gt; 8%</td><td><b>0원</b></td><td>정산 없음 (절벽)</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--ink2);margin:10px 0 0">평가는 실제 발전량이 설비용량의 10% 이상인 시간만. 이 계단 구조가 "분포 예측 → 기대효용 최대화" 결정이론 설계(+0.0035)와 재보정 전략의 출발점이다.</p>
+    </div>
+  </div>
+
+  <h2>시도 보드 — 무엇이 통했고 무엇이 죽었나</h2>
+  <div class="board">
+    <div class="try"><span class="chip best">최고 기록</span><div class="name">배수 재보정 (절반 강도)</div><div class="why">체계적 6~12% 과소예측 발견 → 그룹별 단일 배수 ×0.5 강도 → 0.6280</div></div>
+    <div class="try"><span class="chip win">채택</span><div class="name">GBM 9-분위수 + 결정이론</div><div class="why">발전량 분포 예측 후 대회 점수식 기대효용 최대화 → +0.0035</div></div>
+    <div class="try"><span class="chip win">채택</span><div class="name">3-모델 고정 블렌드</div><div class="why">LSTM 0.35 · Transformer 0.35 · GBM 0.30 — 서로 다르게 틀려서 상쇄 → +0.0055</div></div>
+    <div class="try"><span class="chip win">채택</span><div class="name">웨이크(후류) 피처</div><div class="why">그룹1이 그룹2 상류 1.3km — 풍향 정렬 피처로 g2 CV +0.0095</div></div>
+    <div class="try"><span class="chip win">채택</span><div class="name">비대칭 손실 + pruning</div><div class="why">과소예측 페널티 강화 + 피처 141→65개 — 초기 트랙 0.6091의 뼈대</div></div>
+    <div class="try"><span class="chip run">진행 중</span><div class="name">ECMWF IFS 제3 예보 통합</div><div class="why">예보 품질이 병목 → 세계 최고 정확도 NWP를 재료로 추가 (커버리지 2024-05+)</div></div>
+    <div class="try"><span class="chip run">진행 중</span><div class="name">일일 5-프로브 체제</div><div class="why">CV가 못 가르는 차이를 리더보드로 판정 — w_ficr·월별배수·가중 프로브 대기</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">CV최적 블렌드 가중치</div><div class="why">CV론 최적인데 실전 0.6172 &lt; 고정 0.6227 — 교훈 1의 결정적 증거</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">물리 피처 5배치</div><div class="why">공기밀도·전단·풍향섹터·격자분산·SCADA커브 — 대부분 기존 신호와 중복(노이즈)</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">허브높이·캘린더 피처</div><div class="why">공정 재검증에서 3그룹 모두 소폭 악화 — 코드만 보존</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">신경망 하이퍼튜닝</div><div class="why">Optuna 6개 스터디 전부 조기중단 — 노이즈 이상 개선 없음</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">분포 앙상블 (A1)</div><div class="why">분포 블렌드+단일 결정단계 — 점 블렌드를 못 넘음 (시드 std가 거칢)</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">FICR 계단 surrogate 손실 (A3)</div><div class="why">절벽항이 세 그룹 전부 악화 → 순수 Huber로 밀려남. 큰 오차는 손실로 못 고침</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">XGBoost/CatBoost 앙상블</div><div class="why">nested-LOFO가 가중치 0 부여 — 다양성 기여 없음</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">석포 AWS 외부 관측</div><div class="why">골짜기 관측소(풍속 p95 2.2m/s) — LDAPS 잔차와 상관 ≈ 0</div></div>
+    <div class="try"><span class="chip lose">기각</span><div class="name">isotonic 사후보정</div><div class="why">유연한 보정이 fold 노이즈에 과적합 — g2 역효과. 교훈 2의 출발점</div></div>
+  </div>
+
+  <h2>결과 장부 — 실전 제출 전체</h2>
+  <div class="card tablewrap">
+    <table>
+      <thead><tr><th>#</th><th>날짜</th><th>검증한 것</th><th>점수</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>7/22</td><td>LightGBM 단독 트랙 (pruning+비대칭손실+웨이크)</td><td class="num">0.6091</td><td>기준점</td></tr>
+        <tr><td>2</td><td>7/23</td><td>GBM 분위수 + 결정최적화</td><td class="num">0.6126</td><td>✅ +0.0035</td></tr>
+        <tr><td>3</td><td>7/23</td><td>CV최적 블렌드 가중치 (nested-LOFO)</td><td class="num">0.6172</td><td>△ 고정 가중에 패배</td></tr>
+        <tr><td>4</td><td>7/23</td><td>v14 고정 균등 블렌드</td><td class="num">0.6227</td><td>✅ +0.0055</td></tr>
+        <tr><td>5</td><td>7/23</td><td>신경망-heavy 가중 (GBM 0.20)</td><td class="num">0.6214</td><td>❌ 가중 피크 확인</td></tr>
+        <tr><td>6</td><td>7/24</td><td>배수 재보정 전체 강도</td><td class="num">0.6205</td><td>❌ 과보정</td></tr>
+        <tr class="best"><td>7</td><td>7/24</td><td>배수 재보정 절반 강도</td><td class="num">0.6280</td><td>★ 현재 최고</td></tr>
+        <tr><td>8</td><td>7/24</td><td>g3 배수만 상향</td><td class="num">0.6271</td><td>❌ 과보정 확인</td></tr>
+        <tr><td>9~13</td><td>8/7</td><td>오늘 프로브 5종: w_ficr 0.6 · 월별 배수 · 강도 0.6 · 물리 GBM · 가중 0.25</td><td class="num">대기</td><td>제출 대기 중</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>실험 대기열 (다음 카드)</h2>
+  <div class="card">
+    <div class="qitem"><span class="qn">3</span><span><b>ECMWF IFS 통합</b> — 제3 예보로 재료 업그레이드 · <span class="chip run">진행 중</span></span></div>
+    <div class="qitem"><span class="qn">4</span><span><b>19-분위수 GBM</b> — 분포 해상도를 높여 결정최적화 정밀화</span></div>
+    <div class="qitem"><span class="qn">7</span><span><b>결정최적화 격자 201점</b> — 후보 해상도 1%→0.5%</span></div>
+    <div class="qitem"><span class="qn">8</span><span><b>GBM 시드 배깅</b> — 분위수 추정 분산 축소</span></div>
+    <div class="qitem"><span class="qn">9</span><span><b>풍속 quantile-mapping 편향보정</b> — SCADA 실측으로 LDAPS 풍속 분포 교정</span></div>
+  </div>
+
+  <footer>
+    파이프라인: LDAPS 16격자 + GFS 9격자 → IDW 피처 (~65개/그룹) → GBM 분위수·LSTM·Transformer → 고정 블렌드 → 배수 재보정.
+    상세 소스: <code>reports/pipeline_explained.md</code> · <code>reports/experiment_queue.md</code> · <code>reports/weekly_review.md</code>
+  </footer>
+</div>
+
+<script>
+(function(){
+  var cw=document.getElementById('cw'), tip=document.getElementById('tip');
+  var pts=document.querySelectorAll('#pts circle');
+  function show(c){
+    var d=c.getAttribute('data-t').split('|');
+    tip.innerHTML='<b>'+d[0]+'</b><br>'+d[1];
+    var r=c.getBoundingClientRect(), w=cw.getBoundingClientRect();
+    tip.style.left=(r.left-w.left+r.width/2)+'px';
+    tip.style.top=(r.top-w.top)+'px';
+    tip.style.opacity='1';
+  }
+  pts.forEach(function(c){
+    c.setAttribute('tabindex','0');
+    c.style.cursor='pointer';
+    c.addEventListener('mouseenter',function(){show(c)});
+    c.addEventListener('focus',function(){show(c)});
+    c.addEventListener('mouseleave',function(){tip.style.opacity='0'});
+    c.addEventListener('blur',function(){tip.style.opacity='0'});
+  });
+})();
+</script>
