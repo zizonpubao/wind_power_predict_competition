@@ -133,7 +133,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from configs.paths import DATA_PROCESSED_DIR
+from configs.paths import DATA_INTERIM_DIR, DATA_PROCESSED_DIR
 from src.data.loaders import load_gfs, load_ldaps, load_train_labels
 from src.features.calendar_features import add_calendar_features, add_lead_hours
 from src.features.wake_features import add_group1_group2_wake_features
@@ -182,6 +182,87 @@ def _get_scada_curves() -> dict:
     return _SCADA_CURVES_CACHE
 
 _BLOCK_COLS = ["forecast_kst_dtm", "data_available_kst_dtm"]
+
+# --- ECMWF IFS (third, independent NWP source) --------------------------------
+# Backfilled by ``src.data.fetch_ecmwf`` from the Open-Meteo Previous Runs API
+# using the leakage-safe ``previous_day2`` offset (D-2 12z-or-earlier runs,
+# disseminated by ~04:34 KST D-1, well before the D-1 14:00 KST cutoff -- the
+# full dissemination arithmetic lives in that module's docstring and is
+# re-verified in tests/test_ecmwf.py). Coverage starts ~2024-04; earlier train
+# rows keep NaN in every ECMWF column on purpose (LightGBM handles missing
+# values natively -- never zero-fill these).
+ECMWF_PARQUET = DATA_INTERIM_DIR / "ecmwf_ifs.parquet"
+
+# Model-input columns _add_ecmwf_features produces (referenced by
+# configs/selected_features.json's manual_overrides -- keep names in sync).
+ECMWF_FEATURE_COLS = [
+    "ecmwf_ws100",
+    "ecmwf_ws10",
+    "ecmwf_ws100_cubed",
+    "ecmwf_dir_sin",
+    "ecmwf_dir_cos",
+    "ecmwf_t2m",
+    "ecmwf_sp",
+    "ecmwf_minus_ldaps_ws10",
+    "ecmwf_minus_ldaps_hub",
+    "ecmwf_ldaps_ws_ratio",
+    "ecmwf_minus_gfs_ws100",
+]
+
+
+def load_ecmwf() -> pd.DataFrame | None:
+    """Load the backfilled ECMWF parquet, or None (with a warning) if the
+    backfill has not been run on this machine yet.
+    """
+    if not ECMWF_PARQUET.exists():
+        logger.warning(
+            "%s not found -- run `python -m src.data.fetch_ecmwf` first. "
+            "ECMWF feature columns will be all-NaN.",
+            ECMWF_PARQUET,
+        )
+        return None
+    return pd.read_parquet(ECMWF_PARQUET)
+
+
+def _add_ecmwf_features(merged: pd.DataFrame, ecmwf_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Left-join ECMWF raw fields on forecast_kst_dtm and derive the
+    ECMWF_FEATURE_COLS: wind speeds (10m/100m), the cubic power-in-wind
+    transform, direction sin/cos, 2m temp / surface pressure, and
+    **cross-model disagreement features vs LDAPS/GFS** (difference/ratio --
+    inter-NWP spread is a forecast-uncertainty signal the single-source
+    features cannot express). Rows outside the backfill window (pre-2024-04
+    train rows) stay NaN. Row count is asserted unchanged (m:1 join).
+    """
+    before_len = len(merged)
+    if ecmwf_df is not None:
+        merged = merged.merge(ecmwf_df, on="forecast_kst_dtm", how="left")
+        if len(merged) != before_len:
+            raise ValueError(
+                f"ECMWF join changed row count ({before_len} -> {len(merged)}); "
+                "ecmwf_ifs.parquet likely has duplicate forecast_kst_dtm values."
+            )
+    else:
+        for col in ("ecmwf_wind_speed_100m", "ecmwf_wind_direction_100m",
+                    "ecmwf_wind_speed_10m", "ecmwf_temperature_2m", "ecmwf_surface_pressure"):
+            merged[col] = np.nan
+
+    ws100 = merged.pop("ecmwf_wind_speed_100m")
+    wd100 = merged.pop("ecmwf_wind_direction_100m")
+    merged["ecmwf_ws100"] = ws100
+    merged["ecmwf_ws10"] = merged.pop("ecmwf_wind_speed_10m")
+    merged["ecmwf_ws100_cubed"] = ws100.clip(lower=0.0) ** 3
+    merged["ecmwf_dir_sin"] = np.sin(np.deg2rad(wd100))
+    merged["ecmwf_dir_cos"] = np.cos(np.deg2rad(wd100))
+    merged["ecmwf_t2m"] = merged.pop("ecmwf_temperature_2m")
+    merged["ecmwf_sp"] = merged.pop("ecmwf_surface_pressure")
+    # Cross-model disagreement: like-for-like 10m diff, near-hub diff (ECMWF
+    # 100m vs LDAPS 117m power-law extrapolation), a bounded ratio, and the
+    # GFS-side 100m diff. NaN propagates wherever ECMWF is uncovered.
+    merged["ecmwf_minus_ldaps_ws10"] = merged["ecmwf_ws10"] - merged["ldaps_10m_speed_idw"]
+    merged["ecmwf_minus_ldaps_hub"] = ws100 - merged["ldaps_ws_hub_fixed"]
+    merged["ecmwf_ldaps_ws_ratio"] = ws100 / merged["ldaps_ws_hub_fixed"].clip(lower=0.5)
+    merged["ecmwf_minus_gfs_ws100"] = ws100 - merged["gfs_100m_speed_idw"]
+    return merged
 
 KPX_GROUPS = ("kpx_group_1", "kpx_group_2", "kpx_group_3")
 SPLITS = ("train", "test")
@@ -379,16 +460,25 @@ def _add_physics_features(merged: pd.DataFrame, kpx_group: str) -> pd.DataFrame:
     return merged
 
 
+_ECMWF_FROM_DISK = "__load_from_disk__"
+
+
 def _assemble_feature_table(
     ldaps_renamed: pd.DataFrame,
     gfs_renamed: pd.DataFrame,
     split: str,
     kpx_group: str,
+    ecmwf_df: pd.DataFrame | None | str = _ECMWF_FROM_DISK,
 ) -> pd.DataFrame:
     """Core assembly logic, factored out of `build_feature_table` so tests can
     feed it a small time-sliced subset of already-loaded/renamed LDAPS/GFS
     frames instead of re-reading the full CSVs on every test run.
+
+    ecmwf_df: the backfilled ECMWF frame to join (tests pass a synthetic
+    frame or None); by default it is loaded from ``ECMWF_PARQUET``.
     """
+    if isinstance(ecmwf_df, str) and ecmwf_df == _ECMWF_FROM_DISK:
+        ecmwf_df = load_ecmwf()
     ldaps_pairs = set(zip(ldaps_renamed["forecast_kst_dtm"], ldaps_renamed["data_available_kst_dtm"]))
     gfs_pairs = set(zip(gfs_renamed["forecast_kst_dtm"], gfs_renamed["data_available_kst_dtm"]))
     if ldaps_pairs != gfs_pairs:
@@ -415,6 +505,12 @@ def _assemble_feature_table(
     # directional-sector x speed, SCADA empirical power curve) -- computed on
     # the merged frame where both sources' IDW speed/scalar columns coexist.
     merged = _add_physics_features(merged, kpx_group)
+
+    # ECMWF IFS third-source features + cross-model disagreement (see the
+    # "ECMWF IFS" comment block above ECMWF_FEATURE_COLS). Joined after the
+    # physics batch because the diff/ratio features need ldaps_ws_hub_fixed /
+    # gfs_100m_speed_idw to exist on the merged frame.
+    merged = _add_ecmwf_features(merged, ecmwf_df)
 
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
