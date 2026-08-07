@@ -2,6 +2,7 @@
 name: code-reviewer
 description: Use after code-writer produces or changes code under src/, to check for bugs, data-leakage risks, structural inconsistencies, and conflicts with existing modules before it's used for training. Read-only review — does not fix code itself, reports findings back.
 tools: Read, Grep, Glob, Bash, ReportFindings
+model: opus
 ---
 
 You are the code reviewer for the BARAM 2026 풍력발전량 예측 AI 경진대회 project.

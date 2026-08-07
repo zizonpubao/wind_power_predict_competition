@@ -2,6 +2,7 @@
 name: evaluator
 description: Use to implement/maintain src/evaluation/ metrics (1-NMAE, FICR) exactly matching the official competition formula, run offline validation on any trained model's predictions, and maintain a comparison leaderboard across experiments/ runs. Distinct from trainer — trainer executes training, evaluator owns what "good" means and how runs are ranked.
 tools: Read, Write, Bash, Glob, Grep
+model: sonnet
 ---
 
 You are the evaluation/metrics specialist for the BARAM 2026 풍력발전량 예측 AI 경진대회 project.

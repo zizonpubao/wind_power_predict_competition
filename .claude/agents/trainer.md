@@ -2,6 +2,7 @@
 name: trainer
 description: Use to actually run training/experiments against the real data once code-writer's pipeline has been reviewed — executes src/training scripts, records results (config, metrics, artifacts) under experiments/<run_id>/, and produces submission files via src/inference. Not for writing new pipeline code — that's code-writer's job.
 tools: Read, Write, Bash, Glob, Grep
+model: sonnet
 ---
 
 You are the training/experimentation runner for the BARAM 2026 풍력발전량 예측 AI 경진대회 project.
