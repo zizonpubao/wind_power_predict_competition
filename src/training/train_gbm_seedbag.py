@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from datetime import datetime
 from typing import Any
 
@@ -196,10 +197,18 @@ def main() -> str:
     # other process trying to `joblib.load()` the saved model later (e.g.
     # `src.inference.predict`) then fails with "Can't get attribute
     # 'SeedBaggedGBMQuantileModel' on <module ...>" because it's a different
-    # `__main__`. Forcing the real dotted path here (once, only when the
-    # mismatch would actually happen) makes the saved artifact loadable from
-    # any importer, matching how every other model class in this repo is
-    # already importable by its real module path.
+    # `__main__`. The fix has two parts, both required: (1) alias this
+    # already-loaded `__main__` module object under its real dotted path in
+    # `sys.modules` -- so `sys.modules["src.training.train_gbm_seedbag"] is
+    # sys.modules["__main__"]`, i.e. the *same* module object, not a second,
+    # separately-imported copy (pickle's `save_global` requires
+    # `getattr(sys.modules[module_name], name) is obj` by identity, which a
+    # fresh `import src.training.train_gbm_seedbag` would fail since that
+    # creates a distinct class object from the `__main__` one currently in
+    # use); (2) only then is it safe to rewrite `__module__` to the dotted
+    # path, since that lookup will now resolve to the identical class.
+    if __name__ == "__main__" and "src.training.train_gbm_seedbag" not in sys.modules:
+        sys.modules["src.training.train_gbm_seedbag"] = sys.modules["__main__"]
     if SeedBaggedGBMQuantileModel.__module__ == "__main__":
         SeedBaggedGBMQuantileModel.__module__ = "src.training.train_gbm_seedbag"
 
@@ -229,16 +238,21 @@ def main() -> str:
             seeds=args.seeds,
         )
 
+        # OOF predictions saved BEFORE the model dump: they're the expensive,
+        # irreplaceable-without-a-full-CV-rerun artifact, whereas the final
+        # model is comparatively cheap to reproduce -- if joblib.dump ever
+        # fails again (e.g. a future pickling edge case), the CV work already
+        # done for this group isn't silently lost.
+        oof_path = run_dir / f"oof_predictions_{kpx_group}.parquet"
+        oof_out = all_results[kpx_group]["oof_df"][["forecast_kst_dtm", "pred", "actual", "fold"]]
+        oof_out.to_parquet(oof_path, index=False)
+        logger.info("Saved OOF predictions (%d rows): %s", len(oof_out), oof_path)
+
         capacity = GROUP_CAPACITY_KWH[kpx_group]
         wrapper = SeedBaggedGBMQuantileModel(all_results[kpx_group]["final_models"], capacity)
         model_path = run_dir / f"model_{kpx_group}.joblib"
         joblib.dump(wrapper, model_path)
         logger.info("Saved seed-bagged final model: %s", model_path)
-
-        oof_path = run_dir / f"oof_predictions_{kpx_group}.parquet"
-        oof_out = all_results[kpx_group]["oof_df"][["forecast_kst_dtm", "pred", "actual", "fold"]]
-        oof_out.to_parquet(oof_path, index=False)
-        logger.info("Saved OOF predictions (%d rows): %s", len(oof_out), oof_path)
 
     config = {
         "run_id": run_id,

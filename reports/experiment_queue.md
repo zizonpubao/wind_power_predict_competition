@@ -45,6 +45,7 @@
 | 13 | 재보정 배수 재적합 (g1 GBM 교체 반영) | 새 g1 GBM(191416)으로 블렌드 OOF가 바뀌었으니 half 배수(1.06/1.03/1.0575)가 여전히 최적인가 | 새 블렌드(0.30×gbm_191416+0.35×lstm+0.35×transformer) OOF로 `fit_group_factor` 그리드([0.85,1.12]) 재적합 | **완료, 무승부**: 재적합 full-strength 배수 = g1 1.12(그리드 상한 포화)/g2 1.06/g3 1.115 — 기존과 **소수점까지 완전 동일**(half 적용해도 1.06/1.03/1.0575 그대로). g1이 두 번 다 그리드 상한(1.12)에서 포화되는 구조적 한계이지 신호 변화가 아님. 프로브 불필요(생성 안 함) |
 | 14 | ECMWF g3 추가 | g3 커버구간이 전그룹 실험에서 -0.0006(중립)이었음 — g3 단독으로도 그런가 | g1 유지, g3에만 ECMWF 11피처 추가(g2 제외) 재학습 | **기각** (`20260807_233511_gbm_quantile_pruned`). g1 byte-identical(0.6104, 격리 확인) / g3 CV 0.5680 vs 기준 0.5684(**-0.0004**), 커버구간 OOF 0.5897 vs 0.5903(**-0.0006**) — 원 전그룹 실험의 g3 중립~소폭악화 결론과 정확히 일치. selected_features.json 원복 완료(canonical과 byte-identical), 프로브 미생성 |
 | 15 | g2 물리 피처 (격자분산·ρv³) 한정 | g1은 ECMWF 신소재를 얻었지만(#12) g2는 아직 없음 — 과거 물리 게이트 최강 신호(+0.0027 추정)가 g2 단독으로 실제 개선인가 | g1 ECMWF 유지, g2에만 `ldaps_10m_grid_range`/`ldaps_10m_grid_std`/`ldaps_rho_v3_10m` 3개 추가(g3 제외) 재학습(CPU) | 생성완료 (`submission_20260809_probe_g2physics_halfrecal.csv`). run `20260809_101906_gbm_quantile_pruned`: g2 CV 0.6365 vs 기준 0.6337 (**+0.0028**, 과거 게이트 추정치와 거의 일치), overall 0.6051 vs 0.6042(+0.0009). g1/g3 test 예측 byte-identical(격리 확인, 오염 없음). **selected_features.json에 g2만 3개 피처 영구 반영(manual_overrides 기록)** — 이후 #9(qm풍속)이 이 위에 추가로 얹어짐(g2 최종 0.6383) |
+| 16 | 전부 결합 (A+B+C) | 오늘 채택된 g2 물리(#15)+g2 QM풍속(#9)이 이미 반영된 canonical selected_features(g1=76/g2=71/g3=67) 그대로 시드 배깅(#8, seed 42/202/777)까지 얹으면 누적 효과가 실제로 합산되나 | canonical 그대로 `train_gbm_seedbag.py` 재학습(추가 피처 변경 없음) → 스왑 산식 프로브 | 생성완료 (`submission_20260809_probe_allcombo_halfrecal.csv`). run `20260809_112118_gbm_seedbag_pruned`: g1 0.6116(+0.0012)/g2 0.6381(+0.0044)/g3 0.5708(+0.0024), **overall 0.6068 vs 기준 0.6042(+0.0026, 오늘 CV 최고)** — A+B+C 효과가 서로 상쇄 없이 누적됨(g2는 단독 QM run 0.6383과 거의 동일, 시드배깅이 g2엔 중립이라는 #8 관찰과 일치). 학습 중 `train_gbm_seedbag.py`의 `SeedBaggedGBMQuantileModel.__module__` 재작성 로직이 `-m` 실행 시 `PicklingError`를 일으키는 버그 발견·수정(`sys.modules` identity aliasing 추가 + OOF를 모델 dump보다 먼저 저장하도록 순서 변경, 스모크테스트로 fix 검증 후 재학습). selected_features.json 변경 없음(이미 canonical에 A/B 반영됨) |
 
 ## 결과 장부
 
@@ -65,4 +66,5 @@
 | 08-09 | probe_g2physics | g2 물리 피처(#15) | (제출 대기) | CV +0.0028 (격리 검증 완료) |
 | 08-09 | probe_qmwind | g2 SCADA 풍속 QM(#9) | (제출 대기) | CV +0.0018 (g2physics 위, 격리 검증 완료) |
 | 08-09 | probe_seedbag | 시드 배깅 3개(#8) | (제출 대기) | CV +0.0012 (3그룹 전부 flat~개선) |
+| 08-09 | **probe_allcombo** | A+B+C 전부 결합(#16) | (제출 대기) | **CV +0.0026 (오늘 CV 최고)** |
 | 08-07 | probe_wficr06 | 결정단계 FICR 가중 0.6 | 0.6277 | ❌ 무승부(0.5 유지) |
