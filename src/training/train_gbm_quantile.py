@@ -75,6 +75,7 @@ def run_group(
     feature_set: str,
     early_stopping_rounds: int,
     quantiles: list[float] | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     """Run block-aware CV + a final full-data refit for one kpx_group's
     ``GroupLGBMQuantileModel``, using the fixed spec starting hyperparameters
@@ -85,6 +86,12 @@ def run_group(
     behavior; experiment_queue.md #4 passes ``QUANTILES_19`` (19 levels) via
     ``--n-quantiles 19`` to test whether finer distribution resolution helps
     the decision-optimal post-processing.
+
+    ``seed``: overrides ``DEFAULT_PARAMS["random_state"]`` for every one of
+    the 9 (or 19) quantile sub-models when given (``None`` keeps the default
+    42, unchanged behavior) -- experiment_queue.md #8's seed-bagging probe
+    trains 3 otherwise-identical models at different seeds to average away
+    quantile-estimation variance.
     """
     path = DATA_PROCESSED_DIR / f"features_{kpx_group}_train.parquet"
     df = pd.read_parquet(path)
@@ -99,6 +106,8 @@ def run_group(
     params: dict[str, Any] = dict(DEFAULT_PARAMS)
     if quantiles is not None:
         params["quantiles"] = list(quantiles)
+    if seed is not None:
+        params["random_state"] = int(seed)
 
     oof_df, fold_meta = oof_predict_generic(
         df,
@@ -188,6 +197,17 @@ def main() -> str:
             "experiment_queue.md #4's higher-resolution decision-optimization probe."
         ),
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Overrides DEFAULT_PARAMS['random_state'] (42) for all quantile sub-models. "
+            "Default None keeps the original behavior. experiment_queue.md #8's seed-"
+            "bagging probe trains 3 runs at different seeds and averages their quantile "
+            "arrays before decision-optimization."
+        ),
+    )
     args = parser.parse_args()
 
     quantiles = QUANTILES_19 if args.n_quantiles == 19 else QUANTILES
@@ -197,6 +217,8 @@ def main() -> str:
         run_id += "_pruned"
     if args.n_quantiles != 9:
         run_id += f"_q{args.n_quantiles}"
+    if args.seed is not None:
+        run_id += f"_seed{args.seed}"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -209,6 +231,7 @@ def main() -> str:
             feature_set=args.feature_set,
             early_stopping_rounds=args.early_stopping_rounds,
             quantiles=quantiles,
+            seed=args.seed,
         )
 
         model_path = run_dir / f"model_{kpx_group}.joblib"
@@ -228,6 +251,7 @@ def main() -> str:
         "model_default_params": DEFAULT_PARAMS,
         "n_quantiles": args.n_quantiles,
         "quantiles": quantiles,
+        "seed": args.seed,
         "early_stopping_rounds": args.early_stopping_rounds,
         "git_commit": _get_git_commit(),
         "final_n_estimators_per_group": {g: all_results[g]["final_n_estimators"] for g in KPX_GROUPS},

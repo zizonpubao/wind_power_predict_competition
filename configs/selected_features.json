@@ -49,6 +49,25 @@
         "ecmwf_minus_gfs_ws100"
       ],
       "reason": "Experiment queue #E: the all-3-groups ECMWF run (20260807_142800) found g3's covered-window delta near-neutral (-0.0006), unlike g2's clear -0.0229 harm. Testing whether g3 alone (g1 kept as-is, g2 still excluded) shows a clear gain worth adopting permanently, mirroring the g1 precedent. TEMPORARY/EXPERIMENTAL pending CV comparison against the 20260807_191416_gbm_quantile_pruned g3 baseline (0.5684) -- see reports/experiment_queue.md #E for the outcome. Revert (drop back to g1-only ECMWF) unless g3 shows a clear, unambiguous improvement. RESULT (REJECTED): run 20260807_233511_gbm_quantile_pruned gave g3 CV 0.5680 (-0.0004 vs baseline) and covered-window OOF 0.5897 (-0.0006 vs baseline 0.5903) -- confirms the original all-groups finding that g3 is neutral-to-slightly-negative for ECMWF, not a gain. Reverted; g3 stays ECMWF-free (canonical is g1-only ECMWF, matching the 08-07 probe_ecmwfg1 leaderboard result). This override entry is kept for the record only -- the features below are NOT in kpx_group_3's active selected_features list."
+    },
+    {
+      "date": "2026-08-09",
+      "group": "kpx_group_2",
+      "added_features": [
+        "ldaps_10m_grid_range",
+        "ldaps_10m_grid_std",
+        "ldaps_rho_v3_10m"
+      ],
+      "reason": "Experiment queue #15 (2026-08-09 batch, exp A): g1 gained a new material (ECMWF) on 08-07, g2 has none yet. These 3 physics features (per-grid dispersion + air-density-weighted cubed windspeed) were g2's strongest physics-feature CV signal in an earlier physics-winner gate (+0.0027, referenced in experiment_queue.md #1's lineage). Adding to g2 ONLY (g1's ECMWF override above untouched, g3 untouched) to test in isolation. RESULT (ADOPTED): run 20260809_101906_gbm_quantile_pruned gave g2 CV 0.6365 vs baseline 0.6337 (+0.0028, matches the prior physics-gate estimate almost exactly), overall CV 0.6051 vs 0.6042 (+0.0009). g1/g3 test predictions confirmed byte-identical to the 20260807_191416 baseline (isolation verified, no cross-group contamination). This override is now PERMANENT -- see reports/experiment_queue.md #15 for the leaderboard probe (submission_20260809_probe_g2physics_halfrecal.csv, gbm_new=20260809_101906_gbm_quantile_pruned)."
+    },
+    {
+      "date": "2026-08-09",
+      "group": "kpx_group_2",
+      "added_features": [
+        "ldaps_ws_qm",
+        "ldaps_ws_qm_power_curve"
+      ],
+      "reason": "Experiment queue #9 (2026-08-09 batch, exp B): SCADA scada_vestas_train.csv/scada_unison_train.csv DO have per-turbine nacelle wind-speed columns (*_ws), not just power -- so a percentile-matching bias correction (src/features/wind_qm.py, fit ONCE on train-period paired (LDAPS forecast speed, group-mean SCADA nacelle speed) percentiles, frozen and applied as a pure function of the forecast value -- no leakage, safely applicable to test) was feasible, not rejected for missing data. All 3 groups were tested with the qm feature added (all-groups run 20260809_103230_gbm_quantile_pruned, on top of exp A's g2-physics-adopted baseline): g1 0.6101 vs 0.6104 baseline (-0.0003, noise/neutral), g2 0.6383 vs 0.6365 (+0.0018, clear incremental gain on top of exp A), g3 0.5675 vs 0.5684 (-0.0009, negative). Re-ran g2-ONLY (g1/g3 reverted to no-qm) to confirm isolation: run 20260809_104004_gbm_quantile_pruned gave g2 CV 0.6383 (identical to the all-groups run, confirming the gain is real and not confounded), and g1/g3 test predictions verified byte-identical to the exp-A baseline (20260809_101906). RESULT (ADOPTED, g2 only): PERMANENT. g1/g3 do NOT get this feature (mean nacelle-vs-forecast bias correction did not transfer to CV gain there). See reports/experiment_queue.md #9 for the leaderboard probe (submission_20260809_probe_qmwind_halfrecal.csv, gbm_new=20260809_104004_gbm_quantile_pruned)."
     }
   ],
   "groups": {
@@ -279,9 +298,14 @@
         "ldaps_10m_power_curve_idw_roll_std_24h",
         "wake_alignment_cos_g1g2",
         "wake_sector_exposure_g1g2",
-        "wake_deficit_proxy_g1g2"
+        "wake_deficit_proxy_g1g2",
+        "ldaps_10m_grid_range",
+        "ldaps_10m_grid_std",
+        "ldaps_rho_v3_10m",
+        "ldaps_ws_qm",
+        "ldaps_ws_qm_power_curve"
       ],
-      "n_selected": 66,
+      "n_selected": 71,
       "n_total": 144,
       "excluded_features": [
         "ldaps_10m_v_idw",
