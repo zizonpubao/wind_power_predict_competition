@@ -95,19 +95,19 @@ a{color:var(--accent)}
 <div class="wrap">
   <div class="eyebrow">BARAM 2026 · 풍력발전량 예측 AI 경진대회</div>
   <h1>실험 대시보드 — 모든 시도의 기록</h1>
-  <p class="sub">태백가덕산·원동 풍력 3개 그룹의 시간당 발전량 예측 · 점수 = 0.5·(1−NMAE) + 0.5·FICR · 마지막 갱신 2026-08-07 저녁 (5-프로브 1회차 정산)</p>
+  <p class="sub">태백가덕산·원동 풍력 3개 그룹의 시간당 발전량 예측 · 점수 = 0.5·(1−NMAE) + 0.5·FICR · 마지막 갱신 2026-08-11 (5-프로브 2회차 정산 · D-3)</p>
 
   <div class="tiles">
-    <div class="tile hero"><div class="k">현재 최고 (실전)</div><div class="v">0.6302</div></div>
-    <div class="tile"><div class="k">시작 대비</div><div class="v">+0.0211</div></div>
+    <div class="tile hero"><div class="k">현재 최고 (실전)</div><div class="v">0.6330</div></div>
+    <div class="tile"><div class="k">시작 대비</div><div class="v">+0.0239</div></div>
     <div class="tile"><div class="k">팀 역대 최고 (원본 v14)</div><div class="v">0.6362</div></div>
     <div class="tile"><div class="k">마감까지</div><div class="v">D-7 <small>8/14 10:00</small></div></div>
-    <div class="tile"><div class="k">제출 실험 / 대기</div><div class="v">13회</div></div>
+    <div class="tile"><div class="k">제출 실험 / 대기</div><div class="v">18회</div></div>
   </div>
 
   <div class="grid2" style="margin-top:28px">
     <div class="card">
-      <h2 style="margin-top:0">점수 여정 — 제출 13회의 궤적</h2>
+      <h2 style="margin-top:0">점수 여정 — 제출 18회의 궤적</h2>
       <div class="chartwrap" id="cw">
         <svg viewBox="0 0 720 300" role="img" aria-label="제출 순서에 따른 리더보드 점수 변화. 0.6091에서 시작해 0.6280이 현재 최고.">
           <g stroke="var(--line)" stroke-width="1">
@@ -127,31 +127,33 @@ a{color:var(--accent)}
           <line x1="50" y1="41.9" x2="700" y2="41.9" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="5 4"/>
           <text x="698" y="37" text-anchor="end" font-size="11" fill="var(--gold)" font-weight="700">원본 v14 0.6362 (목표)</text>
           <polyline fill="none" stroke="var(--accent)" stroke-width="2"
-            points="50,197.7 103,177.6 157,151.1 210,119.5 263,127.0 317,132.1 370,89.0 423,94.2 477,92.5 530,76.4 583,105.1 637,97.1 690,90.7"/>
+            points="50,197.7 87.6,177.6 125.3,151.1 162.9,119.5 200.6,127.0 238.2,132.1 275.9,89.0 313.5,94.2 351.2,92.5 388.8,76.4 426.5,105.1 464.1,97.1 501.8,90.7 539.4,74.6 577.1,71.2 614.7,68.3 652.4,80.4 690,60.3"/>
           <g id="pts" fill="var(--accent)">
-            <circle cx="50" cy="197.7" r="4.5" data-t="#1 · 7/22 · LightGBM 단독|0.6091 · 시작 기준점"/>
-            <circle cx="103" cy="177.6" r="4.5" data-t="#2 · 7/23 · GBM 분위수+결정최적화|0.6126 · +0.0035"/>
-            <circle cx="157" cy="151.1" r="4.5" data-t="#3 · 7/23 · CV최적 블렌드|0.6172 · 고정 가중에 패배"/>
-            <circle cx="210" cy="119.5" r="4.5" data-t="#4 · 7/23 · v14 고정 블렌드|0.6227 · +0.0055"/>
-            <circle cx="263" cy="127.0" r="4.5" data-t="#5 · 7/23 · 신경망-heavy 가중|0.6214 · 피크 확인"/>
-            <circle cx="317" cy="132.1" r="4.5" data-t="#6 · 7/24 · 재보정 full|0.6205 · 과보정"/>
-            <circle cx="370" cy="89.0" r="4.5" data-t="#7 · 7/24 · 재보정 half|0.6280 · 당시 최고"/>
-            <circle cx="423" cy="94.2" r="4.5" data-t="#8 · 7/24 · g3 배수 상향|0.6271 · 과보정"/>
-            <circle cx="477" cy="92.5" r="4.5" data-t="#9 · 8/7 · 19-분위수|0.6274 · CV방향 미전이"/>
-            <circle cx="530" cy="76.4" r="7" stroke="var(--card)" stroke-width="2" data-t="#10 · 8/7 · ECMWF g1 수확|0.6302 · ★ 신기록"/>
-            <circle cx="583" cy="105.1" r="4.5" data-t="#11 · 8/7 · 계절별 재보정|0.6252 · 역효과"/>
-            <circle cx="637" cy="97.1" r="4.5" data-t="#12 · 8/7 · 재보정 강도 0.6|0.6266 · 피크=0.5 확정"/>
-            <circle cx="690" cy="90.7" r="4.5" data-t="#13 · 8/7 · FICR 가중 0.6|0.6277 · 무승부"/>
+            <circle cx="50" cy="197.7" r="4" data-t="#1 · 7/22 · LightGBM 단독|0.6091 · 시작"/>
+            <circle cx="87.6" cy="177.6" r="4" data-t="#2 · 7/23 · 분위수+결정최적화|0.6126"/>
+            <circle cx="125.3" cy="151.1" r="4" data-t="#3 · 7/23 · CV최적 블렌드|0.6172"/>
+            <circle cx="162.9" cy="119.5" r="4" data-t="#4 · 7/23 · v14 고정 블렌드|0.6227"/>
+            <circle cx="200.6" cy="127.0" r="4" data-t="#5 · 7/23 · 신경망-heavy|0.6214"/>
+            <circle cx="238.2" cy="132.1" r="4" data-t="#6 · 7/24 · 재보정 full|0.6205"/>
+            <circle cx="275.9" cy="89.0" r="4" data-t="#7 · 7/24 · 재보정 half|0.6280"/>
+            <circle cx="313.5" cy="94.2" r="4" data-t="#8 · 7/24 · g3 배수 상향|0.6271"/>
+            <circle cx="351.2" cy="92.5" r="4" data-t="#9 · 8/7 · 19-분위수|0.6274"/>
+            <circle cx="388.8" cy="76.4" r="4" data-t="#10 · 8/7 · ECMWF g1|0.6302"/>
+            <circle cx="426.5" cy="105.1" r="4" data-t="#11 · 8/7 · 계절 재보정|0.6252"/>
+            <circle cx="464.1" cy="97.1" r="4" data-t="#12 · 8/7 · 강도 0.6|0.6266"/>
+            <circle cx="501.8" cy="90.7" r="4" data-t="#13 · 8/7 · FICR 가중|0.6277"/>
+            <circle cx="539.4" cy="74.6" r="4" data-t="#14 · 8/11 · 전부결합|0.6305"/>
+            <circle cx="577.1" cy="71.2" r="4" data-t="#15 · 8/11 · g2 물리|0.6311"/>
+            <circle cx="614.7" cy="68.3" r="4" data-t="#16 · 8/11 · g2 물리+QM|0.6316"/>
+            <circle cx="652.4" cy="80.4" r="4" data-t="#17 · 8/11 · 시드배깅|0.6295"/>
+            <circle cx="690" cy="60.3" r="7" stroke="var(--card)" stroke-width="2" data-t="#18 · 8/11 · ECMWF 전그룹|0.6330 · ★ 신기록 (CV 역전!)"/>
           </g>
-          <text x="530" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="var(--accent)">0.6302 ★</text>
+          <text x="690" y="48" text-anchor="end" font-size="12" font-weight="800" fill="var(--accent)">0.6330 ★</text>
           <text x="50" y="218" text-anchor="middle" font-size="11" fill="var(--ink2)">0.6091</text>
           <g fill="var(--ink3)" font-size="11">
-            <text x="50" y="268" text-anchor="middle">1</text><text x="157" y="268" text-anchor="middle">3</text>
-            <text x="263" y="268" text-anchor="middle">5</text><text x="370" y="268" text-anchor="middle">7</text>
-            <text x="477" y="268" text-anchor="middle">9</text><text x="583" y="268" text-anchor="middle">11</text>
-            <text x="690" y="268" text-anchor="middle">13</text>
+            <text x="50" y="268" text-anchor="middle">1</text><text x="200.6" y="268" text-anchor="middle">5</text><text x="388.8" y="268" text-anchor="middle">10</text><text x="577.1" y="268" text-anchor="middle">15</text><text x="690" y="268" text-anchor="middle">18</text>
           </g>
-          <text x="375" y="292" text-anchor="middle" font-size="11" fill="var(--ink3)">제출 순서 (7/22 ~ 8/7) · 점에 마우스를 올리면 상세</text>
+          <text x="375" y="292" text-anchor="middle" font-size="11" fill="var(--ink3)">제출 순서 (7/22 ~ 8/11) · 점에 마우스를 올리면 상세</text>
         </svg>
         <div class="tip" id="tip"></div>
       </div>
@@ -245,10 +247,15 @@ a{color:var(--accent)}
         <tr><td>7</td><td>7/24</td><td>배수 재보정 절반 강도</td><td class="num">0.6280</td><td>✅ 당시 최고</td></tr>
         <tr><td>8</td><td>7/24</td><td>g3 배수만 상향</td><td class="num">0.6271</td><td>❌ 과보정 확인</td></tr>
         <tr><td>9</td><td>8/7</td><td>19-분위수 분포 해상도</td><td class="num">0.6274</td><td>❌ CV방향 미전이</td></tr>
-        <tr class="best"><td>10</td><td>8/7</td><td>ECMWF g1 수확 (제3 예보)</td><td class="num">0.6302</td><td>★ 신기록 +0.0022</td></tr>
+        <tr><td>10</td><td>8/7</td><td>ECMWF g1 수확 (제3 예보)</td><td class="num">0.6302</td><td>★ 신기록 +0.0022</td></tr>
         <tr><td>11</td><td>8/7</td><td>계절별 재보정 배수</td><td class="num">0.6252</td><td>❌ 역효과</td></tr>
         <tr><td>12</td><td>8/7</td><td>재보정 강도 0.6</td><td class="num">0.6266</td><td>❌ 피크=0.5 확정</td></tr>
         <tr><td>13</td><td>8/7</td><td>결정단계 FICR 가중 0.6</td><td class="num">0.6277</td><td>❌ 무승부</td></tr>
+        <tr><td>14</td><td>8/11</td><td>g2재료+QM+시드배깅 결합</td><td class="num">0.6305</td><td>✅ 미세</td></tr>
+        <tr><td>15</td><td>8/11</td><td>g2 물리 재료</td><td class="num">0.6311</td><td>✅ +0.0009</td></tr>
+        <tr><td>16</td><td>8/11</td><td>g2 물리+풍속QM</td><td class="num">0.6316</td><td>✅ +0.0014</td></tr>
+        <tr><td>17</td><td>8/11</td><td>시드배깅</td><td class="num">0.6295</td><td>❌ 실전 무익</td></tr>
+        <tr class="best"><td>18</td><td>8/11</td><td>ECMWF 전그룹 (CV 경고의 역전)</td><td class="num">0.6330</td><td>★ 신기록 +0.0028</td></tr>
       </tbody>
     </table>
   </div>
