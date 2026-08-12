@@ -87,5 +87,7 @@
 | 08-12 | **probe_gbm35_ecmwfall** | **GBM 가중 0.30→0.35** | **0.63325** | ✅ **신기록 경신 — 재료 강화된 GBM엔 비중 상향 유효** |
 | 08-12 | probe_ecmwfall_g2mat | ECMWF전그룹+g2재료 결합 | 0.63310 | △ 동률 — g2 재료는 ECMWF와 중복 |
 | 08-12 | probe_ecmwfg1g2_g2mat | g3 ECMWF 제외 | 0.63065 | ❌ -0.0025 — g3 ECMWF 실전 기여 확정 |
+| 08-12 | probe_g3physics | g3 물리 재료 | 0.63315 | △ 무승부(-0.0001) — 취약신호 예상대로 |
+| 08-12 | probe_gbm40 | GBM 가중 0.40 | 0.63254 | ❌ 가중 피크=0.35 확정 |
 | 08-12 | probe_ecmwfall_g2mat(#17,F) | ECMWF 전그룹 + g2 물리/QM 총결합 | (제출 대기) | CV g2 -0.0037(g3 -0.0004) — 부분커버리지 룰에 따라 프로브 생성, 판정은 리더보드로 |
 | 08-12 | probe_ecmwfg1g2_g2mat(#18,G) | ECMWF g1+g2만(g3 분리검증) | (제출 대기) | CV g1/g3 canonical과 동일(격리 확인), g2 -0.0037(#17과 동일) — g3 ECMWF 유무가 g2에 영향 없음 확인 |
