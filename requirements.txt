@@ -9,6 +9,12 @@
 # PyTorch is intentionally NOT here -- it's the biggest install (~2.5GB with
 # CUDA) and only the LSTM/Transformer need it. Add it separately when needed:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# NOTE (2026-08-12): on Python 3.13, cu121 has NO wheels at all (torch never
+# published cp313 builds on that index) and even the plain "torch==2.5.1"
+# pin fails the same way. The cu124 index's oldest cp313-compatible build is
+# torch==2.6.0+cu124 -- that's what actually installs/runs (CUDA confirmed
+# available, GTX 1080) on this machine's venv:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
 pandas
 numpy

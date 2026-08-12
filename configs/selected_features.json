@@ -61,6 +61,16 @@
       "reason": "Experiment queue #15 (2026-08-09 batch, exp A): g1 gained a new material (ECMWF) on 08-07, g2 has none yet. These 3 physics features (per-grid dispersion + air-density-weighted cubed windspeed) were g2's strongest physics-feature CV signal in an earlier physics-winner gate (+0.0027, referenced in experiment_queue.md #1's lineage). Adding to g2 ONLY (g1's ECMWF override above untouched, g3 untouched) to test in isolation. RESULT (ADOPTED): run 20260809_101906_gbm_quantile_pruned gave g2 CV 0.6365 vs baseline 0.6337 (+0.0028, matches the prior physics-gate estimate almost exactly), overall CV 0.6051 vs 0.6042 (+0.0009). g1/g3 test predictions confirmed byte-identical to the 20260807_191416 baseline (isolation verified, no cross-group contamination). This override is now PERMANENT -- see reports/experiment_queue.md #15 for the leaderboard probe (submission_20260809_probe_g2physics_halfrecal.csv, gbm_new=20260809_101906_gbm_quantile_pruned)."
     },
     {
+      "date": "2026-08-12",
+      "group": "kpx_group_3",
+      "added_features": [
+        "ldaps_10m_grid_range",
+        "ldaps_10m_grid_std",
+        "ldaps_rho_v3_10m"
+      ],
+      "reason": "Experiment queue #19 (H): g2 got these same 3 physics features (per-grid dispersion + air-density-weighted cubed windspeed) on 2026-08-09 (#15, +0.0028 CV) but g3 never got them in isolation -- the original all-groups physics gate (referenced in #1's lineage) estimated g3 +0.0014 (positive direction, full-period coverage so the CV is trustworthy, unlike the partial-coverage ECMWF features). Adding to g3 ONLY (g1 ECMWF override and g2 physics/QM overrides above untouched) to test in isolation against the 20260809_104004_gbm_quantile_pruned canonical baseline (g3 CV 0.5684). RESULT (PROVISIONALLY ADOPTED, honesty caveat -- NOT a clean win like g1/g2): run 20260812_100602_gbm_quantile_pruned_seed42 gave g3 CV 0.5697 (+0.0013 vs baseline), g1/g2 test predictions confirmed byte-identical to the 20260809_104004 baseline (isolation verified). BUT per-fold breakdown is NOT a consistent win: fold deltas are -0.0006/+0.0171/-0.0032/-0.0020/-0.0045 -- only 1 of 5 folds improved (fold 2, a large outlier), the other 4 are flat-to-worse. This fails the same 'majority of folds improved' bar (src/ensembling/blend_search.MIN_FOLDS_IMPROVED=3) that the g1/g2 ECMWF and physics precedents cleanly passed -- the positive mean here is fold-2-driven, closer to the project's own noise band (+/-0.001) than a genuine signal. Kept in canonical (matching the task's literal 'positive direction -> keep+probe, only revert if clearly worse' rule) and a leaderboard probe was generated (submission_20260812_probe_g3physics_halfrecal.csv, gbm_new=20260812_100602_gbm_quantile_pruned_seed42), but flagged for leaderboard-driven re-evaluation -- do not treat this as CV-confirmed the way g1-ECMWF/g2-physics/g2-QM were."
+    },
+    {
       "date": "2026-08-09",
       "group": "kpx_group_2",
       "added_features": [
@@ -456,9 +466,12 @@
         "gfs_10m_power_curve_idw_roll_std_24h",
         "gfs_pbl_power_curve_idw_roll_std_6h",
         "gfs_pbl_power_curve_idw_roll_mean_24h",
-        "gfs_pbl_power_curve_idw_roll_std_24h"
+        "gfs_pbl_power_curve_idw_roll_std_24h",
+        "ldaps_10m_grid_range",
+        "ldaps_10m_grid_std",
+        "ldaps_rho_v3_10m"
       ],
-      "n_selected": 67,
+      "n_selected": 70,
       "n_total": 141,
       "excluded_features": [
         "ldaps_10m_v_nearest",

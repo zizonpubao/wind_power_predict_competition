@@ -51,7 +51,7 @@ import yaml
 from configs.paths import DATA_PROCESSED_DIR, EXPERIMENTS_DIR, GROUP_CAPACITY_KWH
 from src.evaluation.metrics import competition_score
 from src.models.lstm_model import DEFAULT_N_SEEDS, GroupLSTMModel
-from src.models.torch_common import BLOCK_COL, DEVICE
+from src.models.torch_common import BLOCK_COL, DEVICE, add_ecmwf_all_groups_features
 from src.training.train_baseline import FEATURE_SETS, KPX_GROUPS, N_SPLITS, _get_feature_cols, _get_git_commit
 from src.validation.splitter import BlockTimeSeriesSplit, assert_no_leakage
 
@@ -89,7 +89,17 @@ def run_group(
     feature_set: str,
     n_seeds: int,
     max_epochs: int,
+    ecmwf_all: bool = False,
 ) -> dict[str, Any]:
+    """``ecmwf_all=True`` (experiment_queue.md #20/I): after the normal
+    ``pruned``/``full`` feature selection, extends the feature set with every
+    group's ECMWF columns (see
+    ``src.models.torch_common.add_ecmwf_all_groups_features``) plus an
+    ``ecmwf_available`` indicator -- does NOT touch
+    ``configs/selected_features.json`` (GBM canonical stays g1-ECMWF-only);
+    this is purely an NN-training-time feature-list extension, recorded in the
+    run's own ``config.yaml``.
+    """
     path = DATA_PROCESSED_DIR / f"features_{kpx_group}_train.parquet"
     df = pd.read_parquet(path)
 
@@ -106,6 +116,9 @@ def run_group(
     )
 
     feature_cols = _get_feature_cols(df, kpx_group=kpx_group, feature_set=feature_set)
+    if ecmwf_all:
+        df, feature_cols = add_ecmwf_all_groups_features(df, feature_cols)
+        logger.info("%s: ecmwf_all=True -> %d feature columns (incl. ecmwf_available)", kpx_group, len(feature_cols))
     capacity = GROUP_CAPACITY_KWH[kpx_group]
     apply_mixup = kpx_group == MIXUP_GROUP
 
@@ -236,6 +249,16 @@ def main() -> str:
         default=list(KPX_GROUPS),
         help="Subset of KPX groups to train (default: all 3). Useful for a single-group timing probe.",
     )
+    parser.add_argument(
+        "--ecmwf-all",
+        action="store_true",
+        help=(
+            "Experiment queue #20 (I): extend the 'pruned' feature set with every group's "
+            "ECMWF columns (src.models.torch_common.add_ecmwf_all_groups_features) plus an "
+            "ecmwf_available indicator. Does NOT touch configs/selected_features.json -- "
+            "recorded only in this run's config.yaml."
+        ),
+    )
     args = parser.parse_args()
 
     logger.info("Torch device: %s", DEVICE)
@@ -243,6 +266,8 @@ def main() -> str:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_lstm"
     if args.feature_set == "pruned":
         run_id += "_pruned"
+    if args.ecmwf_all:
+        run_id += "_ecmwfall"
     run_dir = EXPERIMENTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +281,7 @@ def main() -> str:
             feature_set=args.feature_set,
             n_seeds=args.n_seeds,
             max_epochs=args.max_epochs,
+            ecmwf_all=args.ecmwf_all,
         )
 
         model_path = run_dir / f"model_{kpx_group}.joblib"
@@ -275,6 +301,7 @@ def main() -> str:
         "n_seeds": args.n_seeds,
         "max_epochs": args.max_epochs,
         "feature_set": args.feature_set,
+        "ecmwf_all": args.ecmwf_all,
         "mixup_group": MIXUP_GROUP,
         "git_commit": _get_git_commit(),
         "feature_count_per_group": {g: len(all_results[g]["feature_cols"]) for g in groups},

@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from src.features.build_features import ECMWF_FEATURE_COLS
+
 # Block/sequence conventions (all blocks in the feature parquets are exactly
 # 24 rows -- verified against data/processed/features_*_train.parquet).
 BLOCK_COL = "data_available_kst_dtm"
@@ -94,6 +96,64 @@ class GroupFeatureScaler:
 
     def fit_transform(self, X: np.ndarray) -> np.ndarray:
         return self.fit(X).transform(X)
+
+
+ECMWF_AVAILABLE_COL = "ecmwf_available"
+
+
+def add_ecmwf_all_groups_features(df: pd.DataFrame, feature_cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """Extend ``feature_cols`` with every ``ECMWF_FEATURE_COLS`` entry not
+    already in it, plus a new ``ecmwf_available`` (0/1) indicator feature.
+
+    Experiment queue #20 (I): the winning leaderboard blend (0.6330) only has
+    ECMWF on the GBM leg (0.30 weight, and only for g1 in the GBM's own
+    canonical ``selected_features.json`` -- g2/g3 pick it up separately via
+    the all-groups probe) -- the LSTM/Transformer legs (0.70 combined weight)
+    never see it at all. This helper is how the NN tracks get the same
+    "all 3 groups' ECMWF" material the winning GBM probe used, WITHOUT
+    touching ``configs/selected_features.json`` (that file stays GBM-only
+    canonical; the NN feature set is recorded in the run's own config.yaml
+    instead, per the task's "canonical 건드리지 말고 run config에만 기록" rule).
+
+    Every feature parquet already carries the ECMWF columns for all 3 groups
+    (``src.features.build_features`` merges them unconditionally; only
+    ``configs/selected_features.json`` decides whether a group's GBM run
+    actually uses them) -- so no data pipeline change is needed here, just a
+    feature-list/column addition at NN-training time.
+
+    ``GroupFeatureScaler`` (this module) standardizes with ``nanmean``/``nanstd``
+    then replaces any remaining NaN with 0 post-scaling -- so a pre-2024-04
+    train row (ECMWF not yet backfilled) silently becomes "average ECMWF"
+    after scaling, indistinguishable from a genuinely-average forecast. The
+    ``ecmwf_available`` indicator (1 = real ECMWF value present, 0 = imputed-
+    to-0 because pre-coverage) lets the network learn to discount the ECMWF
+    features when it's 0, rather than being fed a silently-wrong signal with
+    no way to tell coverage apart from genuine data.
+
+    Returns a **copy** of ``df`` (the indicator column added) and the
+    extended feature-column list. Idempotent: re-running on an
+    already-extended ``feature_cols`` does not duplicate columns.
+    """
+    if "ecmwf_ws100" not in df.columns:
+        raise ValueError(
+            "add_ecmwf_all_groups_features requires an 'ecmwf_ws100' column "
+            "(present in every features_<group>_{train,test}.parquet) to derive "
+            "the availability indicator; none found in the given DataFrame."
+        )
+    missing = [c for c in ECMWF_FEATURE_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"DataFrame is missing expected ECMWF feature column(s): {missing}")
+
+    df = df.copy()
+    df[ECMWF_AVAILABLE_COL] = df["ecmwf_ws100"].notna().astype(float)
+
+    new_cols = list(feature_cols)
+    for c in ECMWF_FEATURE_COLS:
+        if c not in new_cols:
+            new_cols.append(c)
+    if ECMWF_AVAILABLE_COL not in new_cols:
+        new_cols.append(ECMWF_AVAILABLE_COL)
+    return df, new_cols
 
 
 def build_block_sequences(
