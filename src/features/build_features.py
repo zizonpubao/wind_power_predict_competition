@@ -338,6 +338,134 @@ def _add_icon_features(merged: pd.DataFrame, icon_df: pd.DataFrame | None) -> pd
     merged["icon_minus_gfs_ws100"] = ws100 - merged["gfs_100m_speed_idw"]
     return merged
 
+
+# --- GEM global (fifth NWP source, hub-height wind) ---------------------------
+# Backfilled by ``src.data.fetch_gem`` (Open-Meteo Previous Runs, same
+# previous_day2 leakage-safe offset as ECMWF/ICON). Coverage ~2024-02-17+;
+# earlier rows keep NaN. Unlike ECMWF/ICON this model exposes 80m wind
+# directly (turbine hub height ~80-100m), used here as the hub proxy.
+GEM_PARQUET = DATA_INTERIM_DIR / "gem.parquet"
+
+GEM_FEATURE_COLS = [
+    "gem_ws80",
+    "gem_ws10",
+    "gem_ws80_cubed",
+    "gem_dir_sin",
+    "gem_dir_cos",
+    "gem_t2m",
+    "gem_sp",
+    "gem_minus_ldaps_ws10",
+    "gem_minus_ldaps_hub",
+    "gem_ldaps_ws_ratio",
+    "gem_minus_gfs_ws100",
+]
+
+
+def load_gem() -> pd.DataFrame | None:
+    if not GEM_PARQUET.exists():
+        logger.warning(
+            "%s not found -- run `python -m src.data.fetch_gem` first. "
+            "GEM feature columns will be all-NaN.",
+            GEM_PARQUET,
+        )
+        return None
+    return pd.read_parquet(GEM_PARQUET)
+
+
+def _add_gem_features(merged: pd.DataFrame, gem_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Same shape/derivation as ``_add_ecmwf_features`` with GEM's native 80m
+    wind standing in for the hub-height series. Row count asserted unchanged.
+    """
+    before_len = len(merged)
+    if gem_df is not None:
+        merged = merged.merge(gem_df, on="forecast_kst_dtm", how="left")
+        if len(merged) != before_len:
+            raise ValueError(
+                f"GEM join changed row count ({before_len} -> {len(merged)}); "
+                "gem.parquet likely has duplicate forecast_kst_dtm values."
+            )
+    else:
+        for col in ("gem_wind_speed_80m", "gem_wind_direction_80m",
+                    "gem_wind_speed_10m", "gem_temperature_2m", "gem_surface_pressure"):
+            merged[col] = np.nan
+
+    ws80 = merged.pop("gem_wind_speed_80m")
+    wd80 = merged.pop("gem_wind_direction_80m")
+    merged["gem_ws80"] = ws80
+    merged["gem_ws10"] = merged.pop("gem_wind_speed_10m")
+    merged["gem_ws80_cubed"] = ws80.clip(lower=0.0) ** 3
+    merged["gem_dir_sin"] = np.sin(np.deg2rad(wd80))
+    merged["gem_dir_cos"] = np.cos(np.deg2rad(wd80))
+    merged["gem_t2m"] = merged.pop("gem_temperature_2m")
+    merged["gem_sp"] = merged.pop("gem_surface_pressure")
+    merged["gem_minus_ldaps_ws10"] = merged["gem_ws10"] - merged["ldaps_10m_speed_idw"]
+    merged["gem_minus_ldaps_hub"] = ws80 - merged["ldaps_ws_hub_fixed"]
+    merged["gem_ldaps_ws_ratio"] = ws80 / merged["ldaps_ws_hub_fixed"].clip(lower=0.5)
+    merged["gem_minus_gfs_ws100"] = ws80 - merged["gfs_100m_speed_idw"]
+    return merged
+
+
+# --- JMA GSM (sixth NWP source, FULL train-period coverage) -------------------
+# Backfilled by ``src.data.fetch_jma``. The only extra NWP whose previous_day2
+# archive covers the entire train period (2022+), so its CV verdict carries no
+# partial-coverage caveat. Coarse 0.5-deg grid, 10m wind only.
+JMA_PARQUET = DATA_INTERIM_DIR / "jma.parquet"
+
+JMA_FEATURE_COLS = [
+    "jma_ws10",
+    "jma_ws10_cubed",
+    "jma_dir_sin",
+    "jma_dir_cos",
+    "jma_t2m",
+    "jma_sp",
+    "jma_minus_ldaps_ws10",
+    "jma_ldaps_ws10_ratio",
+    "jma_minus_gfs_ws10",
+]
+
+
+def load_jma() -> pd.DataFrame | None:
+    if not JMA_PARQUET.exists():
+        logger.warning(
+            "%s not found -- run `python -m src.data.fetch_jma` first. "
+            "JMA feature columns will be all-NaN.",
+            JMA_PARQUET,
+        )
+        return None
+    return pd.read_parquet(JMA_PARQUET)
+
+
+def _add_jma_features(merged: pd.DataFrame, jma_df: pd.DataFrame | None) -> pd.DataFrame:
+    """JMA GSM has no hub-height level, so every feature is 10m-based:
+    speed, cubed speed, direction sin/cos, t2m, surface pressure, and 10m
+    like-for-like disagreement vs LDAPS/GFS. Row count asserted unchanged.
+    """
+    before_len = len(merged)
+    if jma_df is not None:
+        merged = merged.merge(jma_df, on="forecast_kst_dtm", how="left")
+        if len(merged) != before_len:
+            raise ValueError(
+                f"JMA join changed row count ({before_len} -> {len(merged)}); "
+                "jma.parquet likely has duplicate forecast_kst_dtm values."
+            )
+    else:
+        for col in ("jma_wind_speed_10m", "jma_wind_direction_10m",
+                    "jma_temperature_2m", "jma_surface_pressure"):
+            merged[col] = np.nan
+
+    ws10 = merged.pop("jma_wind_speed_10m")
+    wd10 = merged.pop("jma_wind_direction_10m")
+    merged["jma_ws10"] = ws10
+    merged["jma_ws10_cubed"] = ws10.clip(lower=0.0) ** 3
+    merged["jma_dir_sin"] = np.sin(np.deg2rad(wd10))
+    merged["jma_dir_cos"] = np.cos(np.deg2rad(wd10))
+    merged["jma_t2m"] = merged.pop("jma_temperature_2m")
+    merged["jma_sp"] = merged.pop("jma_surface_pressure")
+    merged["jma_minus_ldaps_ws10"] = ws10 - merged["ldaps_10m_speed_idw"]
+    merged["jma_ldaps_ws10_ratio"] = ws10 / merged["ldaps_10m_speed_idw"].clip(lower=0.5)
+    merged["jma_minus_gfs_ws10"] = ws10 - merged["gfs_10m_speed_idw"]
+    return merged
+
 KPX_GROUPS = ("kpx_group_1", "kpx_group_2", "kpx_group_3")
 SPLITS = ("train", "test")
 
@@ -536,6 +664,8 @@ def _add_physics_features(merged: pd.DataFrame, kpx_group: str) -> pd.DataFrame:
 
 _ECMWF_FROM_DISK = "__load_from_disk__"
 _ICON_FROM_DISK = "__load_from_disk__"
+_GEM_FROM_DISK = "__load_from_disk__"
+_JMA_FROM_DISK = "__load_from_disk__"
 
 
 def _assemble_feature_table(
@@ -545,6 +675,8 @@ def _assemble_feature_table(
     kpx_group: str,
     ecmwf_df: pd.DataFrame | None | str = _ECMWF_FROM_DISK,
     icon_df: pd.DataFrame | None | str = _ICON_FROM_DISK,
+    gem_df: pd.DataFrame | None | str = _GEM_FROM_DISK,
+    jma_df: pd.DataFrame | None | str = _JMA_FROM_DISK,
 ) -> pd.DataFrame:
     """Core assembly logic, factored out of `build_feature_table` so tests can
     feed it a small time-sliced subset of already-loaded/renamed LDAPS/GFS
@@ -559,6 +691,10 @@ def _assemble_feature_table(
         ecmwf_df = load_ecmwf()
     if isinstance(icon_df, str) and icon_df == _ICON_FROM_DISK:
         icon_df = load_icon()
+    if isinstance(gem_df, str) and gem_df == _GEM_FROM_DISK:
+        gem_df = load_gem()
+    if isinstance(jma_df, str) and jma_df == _JMA_FROM_DISK:
+        jma_df = load_jma()
     ldaps_pairs = set(zip(ldaps_renamed["forecast_kst_dtm"], ldaps_renamed["data_available_kst_dtm"]))
     gfs_pairs = set(zip(gfs_renamed["forecast_kst_dtm"], gfs_renamed["data_available_kst_dtm"]))
     if ldaps_pairs != gfs_pairs:
@@ -595,6 +731,11 @@ def _assemble_feature_table(
     # ICON global fourth-source features (same pattern as ECMWF above, see
     # "ICON global" comment block above ICON_FEATURE_COLS).
     merged = _add_icon_features(merged, icon_df)
+
+    # GEM global fifth-source (hub-height 80m wind) and JMA GSM sixth-source
+    # (full-train-coverage, 10m only) features -- same join pattern.
+    merged = _add_gem_features(merged, gem_df)
+    merged = _add_jma_features(merged, jma_df)
 
     lag_value_cols = [f"{prefix}_speed_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
     lag_value_cols += [f"{prefix}_power_curve_idw" for _u, _v, prefix in _LDAPS_LEVELS + _GFS_LEVELS]
